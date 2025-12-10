@@ -183,6 +183,85 @@ func TestPollerRecordsQueueDropsAndCommandAge(t *testing.T) {
 	assertCounterValue(t, rm, metricNameCommandsPolled, 1)
 	assertCounterValueWithAttributes(t, rm, metricNameCommandsQueueDrops, attribute.String(attributeKeyDropReason, dropReasonQueueFull), 1)
 	assertHistogramCount(t, rm, metricNameCommandsAge, 1)
+	assertHistogramSumWithAttributes(t, rm, metricNameCommandsAge, attribute.KeyValue{}, 3)
+}
+
+func TestPollerRecordsContextCanceledQueueDrops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	queue := &cancelingQueue{cancel: cancel}
+	fetcher := &recordingFetcher{
+		t: t,
+		data: []PolledCommand{
+			stubCommand{id: "1"},
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer func() {
+		_ = meterProvider.Shutdown(context.Background())
+	}()
+
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second)
+	if err != nil {
+		t.Fatalf("new poller: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		poller.Run(ctx)
+	}()
+
+	wg.Wait()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	assertCounterValueWithAttributes(t, rm, metricNameCommandsQueueDrops, attribute.String(attributeKeyDropReason, dropReasonContextClosed), 1)
+}
+
+func TestPollerTagsPollErrors(t *testing.T) {
+	queue := &chanQueue{ch: make(chan PolledCommand, 1)}
+	fetcher := &erroringFetcher{err: context.DeadlineExceeded, pollCh: make(chan struct{}, 1)}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer func() {
+		_ = meterProvider.Shutdown(context.Background())
+	}()
+
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond)
+	if err != nil {
+		t.Fatalf("new poller: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		poller.Run(ctx)
+	}()
+
+	fetcher.waitForPoll(t)
+	cancel()
+	wg.Wait()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	assertCounterValueWithAttributes(t, rm, metricNameCommandsPollErrors, attribute.String(attributeKeyErrorKind, errorKindTimeout), 1)
+	assertHistogramCountWithAttributes(t, rm, metricNameCommandsPollLatency, attribute.Bool("error", true), 1)
 }
 
 type chanQueue struct {
@@ -217,6 +296,24 @@ type failingQueue struct{}
 func (f *failingQueue) Capacity() int                               { return 1 }
 func (f *failingQueue) Length() int                                 { return 0 }
 func (f *failingQueue) Enqueue(context.Context, PolledCommand) bool { return false }
+
+type cancelingQueue struct {
+	cancel context.CancelFunc
+}
+
+func (c *cancelingQueue) Capacity() int { return 1 }
+func (c *cancelingQueue) Length() int   { return 0 }
+func (c *cancelingQueue) Enqueue(ctx context.Context, _ PolledCommand) bool {
+	if c.cancel != nil {
+		c.cancel()
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	default:
+		return false
+	}
+}
 
 func assertCounterValue(t *testing.T, rm metricdata.ResourceMetrics, name string, want int64) {
 	t.Helper()
@@ -353,10 +450,131 @@ func findHistogramCount(rm metricdata.ResourceMetrics, name string) (int64, bool
 	return 0, false
 }
 
+func assertHistogramCountWithAttributes(t *testing.T, rm metricdata.ResourceMetrics, name string, attr attribute.KeyValue, want int64) {
+	t.Helper()
+
+	got, ok := findHistogramCountWithAttributes(rm, name, attr)
+	if !ok {
+		t.Fatalf("metric %q with attribute %q=%q not found", name, attr.Key, attr.Value.AsString())
+	}
+
+	if got != want {
+		t.Fatalf("metric %q (%q=%q) count = %d, want %d", name, attr.Key, attr.Value.AsString(), got, want)
+	}
+}
+
+func findHistogramCountWithAttributes(rm metricdata.ResourceMetrics, name string, attr attribute.KeyValue) (int64, bool) {
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != name {
+				continue
+			}
+			histogram, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok {
+				return 0, false
+			}
+			if attr.Key == "" {
+				var count int64
+				for _, dp := range histogram.DataPoints {
+					count += int64(dp.Count)
+				}
+				return count, count > 0
+			}
+			var count int64
+			for _, dp := range histogram.DataPoints {
+				if attributesContain(dp.Attributes, attr) {
+					count += int64(dp.Count)
+				}
+			}
+			return count, count > 0
+		}
+	}
+	return 0, false
+}
+
+func assertHistogramSumWithAttributes(t *testing.T, rm metricdata.ResourceMetrics, name string, attr attribute.KeyValue, wantSeconds float64) {
+	t.Helper()
+
+	got, ok := findHistogramSumWithAttributes(rm, name, attr)
+	if !ok {
+		if attr.Key == "" {
+			t.Fatalf("metric %q not found", name)
+		}
+		t.Fatalf("metric %q with attribute %q=%q not found", name, attr.Key, attr.Value.AsString())
+	}
+
+	if got <= 0 {
+		if attr.Key == "" {
+			t.Fatalf("metric %q sum was non-positive", name)
+		}
+		t.Fatalf("metric %q (%q=%q) sum was non-positive", name, attr.Key, attr.Value.AsString())
+	}
+
+	if diff := got - wantSeconds; diff > 1 || diff < -1 {
+		if attr.Key == "" {
+			t.Fatalf("metric %q sum = %f, want around %f", name, got, wantSeconds)
+		}
+		t.Fatalf("metric %q (%q=%q) sum = %f, want around %f", name, attr.Key, attr.Value.AsString(), got, wantSeconds)
+	}
+}
+
+func findHistogramSumWithAttributes(rm metricdata.ResourceMetrics, name string, attr attribute.KeyValue) (float64, bool) {
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != name {
+				continue
+			}
+			histogram, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok {
+				return 0, false
+			}
+			if attr.Key == "" {
+				if len(histogram.DataPoints) == 0 {
+					return 0, false
+				}
+				return histogram.DataPoints[0].Sum, true
+			}
+			for _, dp := range histogram.DataPoints {
+				if attributesContain(dp.Attributes, attr) {
+					return dp.Sum, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
 type timeoutRecordingFetcher struct {
 	mu        sync.Mutex
 	callCount int
 	durations []time.Duration
+}
+
+type erroringFetcher struct {
+	err    error
+	pollCh chan struct{}
+}
+
+func (f *erroringFetcher) Poll(ctx context.Context, limit int) ([]PolledCommand, types.TunnelServiceRequestID, error) {
+	if f.pollCh != nil {
+		select {
+		case f.pollCh <- struct{}{}:
+		default:
+		}
+	}
+	return nil, "", f.err
+}
+
+func (f *erroringFetcher) waitForPoll(t *testing.T) {
+	t.Helper()
+	if f.pollCh == nil {
+		t.Fatal("erroringFetcher poll channel was nil")
+	}
+	select {
+	case <-f.pollCh:
+	case <-time.After(time.Second):
+		t.Fatal("poll was not invoked")
+	}
 }
 
 func (f *timeoutRecordingFetcher) Poll(ctx context.Context, limit int) ([]PolledCommand, types.TunnelServiceRequestID, error) {

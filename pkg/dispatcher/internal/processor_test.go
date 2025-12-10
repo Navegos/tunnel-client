@@ -569,6 +569,47 @@ func TestProcessorRecordsNotificationLatency(t *testing.T) {
 	}
 }
 
+func TestProcessorConnectFailureDoesNotRecordLatency(t *testing.T) {
+	t.Parallel()
+
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() {
+		_ = meterProvider.Shutdown(context.Background())
+	})
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+	transport := &failingForwardingTransport{err: errors.New("connect failed")}
+
+	processor, err := NewProcessor(logger, transport, responder, &config.MCPConfig{ConnectionMaxTTL: time.Second}, newTestControlPlaneConfig(t), meterProvider)
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("connect-failure"),
+		message:    &jsonrpc.Request{Method: "initialize"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-connect-failure",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.Error(t, err)
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+
+	if histogram, ok := findHistogram(rm, metricNameCommandEndToEndLatency); ok {
+		require.Len(t, histogram.DataPoints, 0, "latency metrics should not record on connect failure")
+	}
+}
+
 func TestProcessorRequiresShardToken(t *testing.T) {
 	t.Parallel()
 
@@ -687,6 +728,14 @@ type stubForwardingTransport struct {
 
 func (s *stubForwardingTransport) Connect(context.Context) (mcpclient.ForwardingConnection, error) {
 	return s.conn, nil
+}
+
+type failingForwardingTransport struct {
+	err error
+}
+
+func (s *failingForwardingTransport) Connect(context.Context) (mcpclient.ForwardingConnection, error) {
+	return nil, s.err
 }
 
 type stubForwardingConnection struct {

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
@@ -24,12 +26,58 @@ type QueueListener struct {
 	processor Processor
 	queue     controlplane.PolledCommandQueue
 	pool      *ants.Pool
+	metrics   *queueListenerMetrics
 
 	listenerWG sync.WaitGroup
 }
 
+type queueListenerMetrics struct {
+	workerPoolCapacity  metric.Int64ObservableGauge
+	workerPoolOccupancy metric.Int64ObservableGauge
+}
+
+func newQueueListenerMetrics(meter metric.Meter, pool *ants.Pool) (*queueListenerMetrics, error) {
+	if meter == nil {
+		return nil, fmt.Errorf("dispatcher queue listener: nil meter")
+	}
+	if pool == nil {
+		return nil, fmt.Errorf("dispatcher queue listener: nil worker pool")
+	}
+
+	workerPoolCapacity, err := meter.Int64ObservableGauge(
+		"dispatcher_worker_pool_capacity",
+		metric.WithDescription("Capacity of the dispatcher worker pool."),
+		metric.WithUnit("{count}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	workerPoolOccupancy, err := meter.Int64ObservableGauge(
+		"dispatcher_worker_pool_occupancy",
+		metric.WithDescription("Current occupancy (running workers) of the dispatcher worker pool."),
+		metric.WithUnit("{count}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
+		observer.ObserveInt64(workerPoolCapacity, int64(pool.Cap()))
+		observer.ObserveInt64(workerPoolOccupancy, int64(pool.Running()))
+		return nil
+	}, workerPoolCapacity, workerPoolOccupancy); err != nil {
+		return nil, err
+	}
+
+	return &queueListenerMetrics{
+		workerPoolCapacity:  workerPoolCapacity,
+		workerPoolOccupancy: workerPoolOccupancy,
+	}, nil
+}
+
 // NewQueueListener constructs a QueueListener with a worker pool sized according to the MCP configuration.
-func NewQueueListener(logger *slog.Logger, processor Processor, queue controlplane.PolledCommandQueue, mcpConfig *config.MCPConfig) (*QueueListener, error) {
+func NewQueueListener(logger *slog.Logger, processor Processor, queue controlplane.PolledCommandQueue, mcpConfig *config.MCPConfig, meterProvider *sdkmetric.MeterProvider) (*QueueListener, error) {
 	if logger == nil {
 		return nil, fmt.Errorf("dispatcher queue listener: nil logger")
 	}
@@ -45,6 +93,9 @@ func NewQueueListener(logger *slog.Logger, processor Processor, queue controlpla
 	if mcpConfig.MaxConcurrentRequests <= 0 {
 		return nil, fmt.Errorf("dispatcher queue listener: non-positive max concurrent requests")
 	}
+	if meterProvider == nil {
+		return nil, fmt.Errorf("dispatcher queue listener: nil meter provider")
+	}
 
 	pool, err := ants.NewPool(mcpConfig.MaxConcurrentRequests)
 	if err != nil {
@@ -52,12 +103,17 @@ func NewQueueListener(logger *slog.Logger, processor Processor, queue controlpla
 	}
 
 	baseLogger := logger.With(tclog.FieldComponent, tclog.ComponentDispatcher)
+	metrics, err := newQueueListenerMetrics(meterProvider.Meter("dispatcher"), pool)
+	if err != nil {
+		return nil, fmt.Errorf("dispatcher queue listener: %w", err)
+	}
 
 	return &QueueListener{
 		logger:    baseLogger,
 		processor: processor,
 		queue:     queue,
 		pool:      pool,
+		metrics:   metrics,
 	}, nil
 }
 
