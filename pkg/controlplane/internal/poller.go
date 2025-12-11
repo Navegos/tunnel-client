@@ -67,8 +67,10 @@ type Poller struct {
 }
 
 // NewPoller builds a Poller with sensible defaults for retry and queue
-// backpressure handling. A nil logger defaults to slog.Default().
-func NewPoller(queue Queue, fetcher Fetcher, logger *slog.Logger, meter metric.Meter, pollTimeout time.Duration) (*Poller, error) {
+// backpressure handling. A nil logger defaults to slog.Default(). backoffMin /
+// backoffMax override the default retry window when non-zero; zero values
+// preserve defaults.
+func NewPoller(queue Queue, fetcher Fetcher, logger *slog.Logger, meter metric.Meter, pollTimeout time.Duration, backoffMin, backoffMax time.Duration) (*Poller, error) {
 	if queue == nil {
 		return nil, fmt.Errorf("controlplane internal poller: queue cannot be nil")
 	}
@@ -82,13 +84,22 @@ func NewPoller(queue Queue, fetcher Fetcher, logger *slog.Logger, meter metric.M
 		pollTimeout = defaultPollerTimeout
 	}
 
+	minBackoff := defaultBackoffMin
+	if backoffMin > 0 {
+		minBackoff = backoffMin
+	}
+	maxBackoff := defaultBackoffMax
+	if backoffMax > 0 {
+		maxBackoff = backoffMax
+	}
+
 	p := &Poller{
 		queue:   queue,
 		fetcher: fetcher,
 		logger:  logger,
 		backoff: &backoff.Backoff{
-			Min:    defaultBackoffMin,
-			Max:    defaultBackoffMax,
+			Min:    minBackoff,
+			Max:    maxBackoff,
 			Factor: 2,
 			Jitter: true,
 		},

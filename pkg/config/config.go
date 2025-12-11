@@ -65,7 +65,11 @@ type ControlPlaneConfig struct {
 	APIKey              string
 	MaxInFlightRequests int
 	PollTimeout         time.Duration
-	ExtraHeaders        map[string]string
+	// PollBackoffMin/PollBackoffMax allow overriding the poller's retry window.
+	// Zero values fall back to the internal defaults.
+	PollBackoffMin time.Duration
+	PollBackoffMax time.Duration
+	ExtraHeaders   map[string]string
 }
 
 // LoggingConfig defines logging behavior for the client.

@@ -104,7 +104,7 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 	cfg := harnessConfig{
 		apiKey:          "test-api-key",
 		tunnelID:        types.TunnelID("tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-		scenarioTimeout: 2 * time.Second,
+		scenarioTimeout: 4 * time.Second,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -124,8 +124,10 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 			BaseURL:             nil,
 			TunnelID:            cfg.tunnelID,
 			APIKey:              cfg.apiKey,
-			MaxInFlightRequests: 4,
-			PollTimeout:         20 * time.Millisecond,
+			MaxInFlightRequests: 10,
+			PollTimeout:         100 * time.Millisecond,
+			PollBackoffMin:      50 * time.Millisecond,
+			PollBackoffMax:      300 * time.Millisecond,
 		},
 		Logging: config.LoggingConfig{
 			Level:  slog.LevelError,

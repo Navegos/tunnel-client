@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
-	wiretypes "go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
+	"go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
 	harnesspkg "go.openai.org/api/tunnel-client/testsupport/e2e"
 	"go.openai.org/api/tunnel-client/testsupport/mockmcpserver"
 	"go.openai.org/api/tunnel-client/testsupport/mocktunnelservice"
