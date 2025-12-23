@@ -1,4 +1,4 @@
-package controlplane
+package fx
 
 import (
 	"context"
@@ -11,12 +11,13 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
+	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.openai.org/api/tunnel-client/pkg/controlplane/internal"
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
 func TestRunPollerStartsEvenWhenFetcherBlocks(t *testing.T) {
-	queue := make(PolledCommandQueue, 1)
+	queue := make(controlplane.PolledCommandQueue, 1)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	fetcher := &blockingFetcher{started: make(chan struct{}, 1)}
@@ -37,7 +38,7 @@ func TestRunPollerStartsEvenWhenFetcherBlocks(t *testing.T) {
 	app := fxtest.New(
 		t,
 		fx.Supply(logger),
-		fx.Supply(poller),
+		fx.Supply(fx.Annotate(poller, fx.As(new(internal.Poller)))),
 		fx.Invoke(runPoller),
 	)
 
@@ -54,7 +55,7 @@ type blockingFetcher struct {
 	started chan struct{}
 }
 
-func (f *blockingFetcher) Poll(ctx context.Context, limit int) ([]internal.PolledCommand, types.TunnelServiceRequestID, error) {
+func (f *blockingFetcher) Poll(ctx context.Context, limit int) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
 	select {
 	case f.started <- struct{}{}:
 	default:

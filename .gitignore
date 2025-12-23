@@ -1,3 +1,4 @@
 # binary output from `go build ./...`
 /tunnel-client
 bin/
+/client

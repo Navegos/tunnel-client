@@ -6,8 +6,25 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 
+	"go.openai.org/api/tunnel-client/pkg/controlplane"
+	"go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
+
+var (
+	_ controlplane.PolledCommand         = (*oauthDiscoveryCommand)(nil)
+	_ controlplane.OauthDiscoveryCommand = (*oauthDiscoveryCommand)(nil)
+	_ controlplane.PolledCommand         = (*jsonRpcCommand)(nil)
+	_ controlplane.JsonRpcCommand        = (*jsonRpcCommand)(nil)
+	_ typedCommand                       = (*oauthDiscoveryCommand)(nil)
+	_ typedCommand                       = (*jsonRpcCommand)(nil)
+)
+
+// typedCommand narrows commands to those with a known discriminator.
+type typedCommand interface {
+	controlplane.PolledCommand
+	commandType() wiretypes.CommandType
+}
 
 // basePolledCommand contains fields common to all polled command implementations
 // and implements the internal.PolledCommand interface.
@@ -37,6 +54,10 @@ func (c *basePolledCommand) SessionID() (string, bool) {
 	return *c.sessionID, true
 }
 
+// commandType returns an empty discriminator for the base type; concrete
+// commands must override this.
+func (c *basePolledCommand) commandType() wiretypes.CommandType { return "" }
+
 // jsonRpcCommand represents a JSON-RPC command; it implements JsonRpcCommand via Message().
 type jsonRpcCommand struct {
 	basePolledCommand
@@ -45,10 +66,17 @@ type jsonRpcCommand struct {
 
 // Message is only implemented by jsonRpcCommand
 func (c *jsonRpcCommand) Message() jsonrpc.Message { return c.message }
+func (c *jsonRpcCommand) commandType() wiretypes.CommandType {
+	return wiretypes.CommandTypeJSONRPC
+}
 
 // oauthDiscoveryCommand represents a non-JSON-RPC command (OAuth discovery).
 // It intentionally does NOT include a Message() method so it will not satisfy
 // JsonRpcCommand, allowing the dispatcher to distinguish the type.
 type oauthDiscoveryCommand struct {
 	basePolledCommand
+}
+
+func (c *oauthDiscoveryCommand) commandType() wiretypes.CommandType {
+	return wiretypes.CommandTypeOAuthDiscovery
 }

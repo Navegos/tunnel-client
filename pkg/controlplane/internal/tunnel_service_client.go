@@ -18,6 +18,7 @@ import (
 	otelmetric "go.opentelemetry.io/otel/metric"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	wiretypes "go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	tcmetrics "go.openai.org/api/tunnel-client/pkg/metrics"
@@ -210,7 +211,7 @@ func (c *TunnelServiceClient) PostResponse(ctx context.Context, requestID types.
 }
 
 // Poll requests up to limit commands from the control plane.
-func (c *TunnelServiceClient) Poll(ctx context.Context, limit int) ([]PolledCommand, types.TunnelServiceRequestID, error) {
+func (c *TunnelServiceClient) Poll(ctx context.Context, limit int) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
 	if limit <= 0 {
 		return nil, "", nil
 	}
@@ -250,7 +251,7 @@ func (c *TunnelServiceClient) Poll(ctx context.Context, limit int) ([]PolledComm
 	}
 }
 
-func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, limit int) ([]PolledCommand, error) {
+func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, limit int) ([]controlplane.PolledCommand, error) {
 	limited := limit
 	if limited <= 0 {
 		limited = 1
@@ -291,7 +292,7 @@ func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, l
 			slog.Int("total", total),
 		)
 	}
-	out := make([]PolledCommand, 0, len(rawCommands))
+	out := make([]controlplane.PolledCommand, 0, len(rawCommands))
 	for _, raw := range rawCommands {
 		// Peek discriminator for forward-compat. Missing or empty means JSON-RPC.
 		var probe struct {

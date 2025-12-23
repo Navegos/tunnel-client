@@ -4,7 +4,7 @@ import (
 	"go.uber.org/fx"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
-	"go.openai.org/api/tunnel-client/pkg/controlplane"
+	controlplane "go.openai.org/api/tunnel-client/pkg/controlplane/fx"
 	"go.openai.org/api/tunnel-client/pkg/dispatcher"
 	"go.openai.org/api/tunnel-client/pkg/health"
 	"go.openai.org/api/tunnel-client/pkg/log"

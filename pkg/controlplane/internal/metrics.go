@@ -46,7 +46,7 @@ const (
 	dropReasonContextClosed = "context_canceled"
 )
 
-func newPollerMetrics(meter metric.Meter, queue Queue) (*pollerMetrics, error) {
+func newPollerMetrics(meter metric.Meter, queue queue) (*pollerMetrics, error) {
 	if meter == nil {
 		return nil, fmt.Errorf("meter cannot be nil")
 	}

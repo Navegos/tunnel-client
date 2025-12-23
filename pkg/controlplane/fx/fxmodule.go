@@ -1,4 +1,4 @@
-package controlplane
+package fx
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"go.uber.org/fx"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.openai.org/api/tunnel-client/pkg/controlplane/internal"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 )
@@ -31,8 +32,8 @@ type fetcherParams struct {
 type clientResult struct {
 	fx.Out
 
-	Fetcher   internal.Fetcher
-	Responder Responder
+	Fetcher   controlplane.Fetcher
+	Responder controlplane.Responder
 }
 
 func newTunnelServiceClient(p fetcherParams) (clientResult, error) {
@@ -52,13 +53,13 @@ type pollerParams struct {
 	fx.In
 
 	Config             *config.ControlPlaneConfig
-	PolledCommandQueue PolledCommandQueue
-	Fetcher            internal.Fetcher
+	PolledCommandQueue controlplane.PolledCommandQueue
+	Fetcher            controlplane.Fetcher
 	Logger             *slog.Logger
 	MeterProvider      *sdkmetric.MeterProvider
 }
 
-func newPoller(p pollerParams) (*internal.Poller, error) {
+func newPoller(p pollerParams) (internal.Poller, error) {
 	logger := p.Logger.With(tclog.FieldComponent, tclog.ComponentControlPlane)
 	if p.PolledCommandQueue == nil {
 		panic("controlplane poller: dispatcher queue is nil")
@@ -76,7 +77,7 @@ type runnerParams struct {
 
 	Lifecycle fx.Lifecycle
 	Logger    *slog.Logger
-	Poller    *internal.Poller
+	Poller    internal.Poller
 }
 
 func runPoller(p runnerParams) error {
@@ -105,7 +106,7 @@ func runPoller(p runnerParams) error {
 }
 
 type queueAdapter struct {
-	queue  PolledCommandQueue
+	queue  controlplane.PolledCommandQueue
 	logger *slog.Logger
 }
 
@@ -117,17 +118,11 @@ func (q *queueAdapter) Length() int {
 	return len(q.queue)
 }
 
-func (q *queueAdapter) Enqueue(ctx context.Context, cmd internal.PolledCommand) bool {
-	polled, ok := cmd.(PolledCommand)
-	if !ok {
-		q.logger.WarnContext(ctx, "dropping command with unexpected type")
-		return true
-	}
-
+func (q *queueAdapter) Enqueue(ctx context.Context, cmd controlplane.PolledCommand) bool {
 	select {
 	case <-ctx.Done():
 		return false
-	case q.queue <- polled:
+	case q.queue <- cmd:
 		return true
 	}
 }

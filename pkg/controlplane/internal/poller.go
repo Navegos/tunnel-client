@@ -6,15 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"time"
 
 	"github.com/jpillora/backoff"
+	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
-	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
 const (
@@ -24,39 +23,24 @@ const (
 	defaultPollerTimeout  = 30 * time.Second
 )
 
-// PolledCommand mirrors the controlplane.PolledCommand interface. It lives in
-// this package to avoid an import cycle between controlplane and its internal
-// implementation details.
-type PolledCommand interface {
-	RequestID() types.RequestID
-	EnqueuedAt() time.Time
-	PolledAt() time.Time
-	Headers() http.Header
-	ShardToken() string
-	SessionID() (string, bool)
-}
-
-// Queue exposes the minimal methods the poller needs from the dispatcher queue.
-type Queue interface {
+// queue exposes the minimal methods the poller needs from the dispatcher queue.
+type queue interface {
 	Capacity() int
 	Length() int
-	Enqueue(ctx context.Context, cmd PolledCommand) bool
+	Enqueue(ctx context.Context, cmd controlplane.PolledCommand) bool
 }
 
-// Fetcher abstracts the control-plane poll endpoint. Implementations should honor
-// the provided limit and return at most that many commands so the poller can respect
-// downstream backpressure. TunnelServiceRequestID is returned so callers can log/trace
-// the control-plane request identifier associated with the poll.
-type Fetcher interface {
-	Poll(ctx context.Context, limit int) ([]PolledCommand, types.TunnelServiceRequestID, error)
+// Poller exposes the polling loop to callers outside this package.
+type Poller interface {
+	Run(ctx context.Context)
 }
 
-// Poller coordinates polling the control plane and publishing work items to the
+// poller coordinates polling the control plane and publishing work items to the
 // dispatcher queue. It manages basic retry/backoff behavior and ensures it does
 // not enqueue more work than the queue can hold.
-type Poller struct {
-	queue          Queue
-	fetcher        Fetcher
+type poller struct {
+	queue          queue
+	fetcher        controlplane.Fetcher
 	logger         *slog.Logger
 	backoff        *backoff.Backoff
 	queueFullDelay time.Duration
@@ -68,8 +52,8 @@ type Poller struct {
 // backpressure handling. A nil logger defaults to slog.Default(). backoffMin /
 // backoffMax override the default retry window when non-zero; zero values
 // preserve defaults.
-func NewPoller(queue Queue, fetcher Fetcher, logger *slog.Logger, meter metric.Meter, pollTimeout time.Duration, backoffMin, backoffMax time.Duration) (*Poller, error) {
-	if queue == nil {
+func NewPoller(q queue, fetcher controlplane.Fetcher, logger *slog.Logger, meter metric.Meter, pollTimeout time.Duration, backoffMin, backoffMax time.Duration) (Poller, error) {
+	if q == nil {
 		return nil, fmt.Errorf("controlplane internal poller: queue cannot be nil")
 	}
 	if fetcher == nil {
@@ -91,8 +75,8 @@ func NewPoller(queue Queue, fetcher Fetcher, logger *slog.Logger, meter metric.M
 		maxBackoff = backoffMax
 	}
 
-	p := &Poller{
-		queue:   queue,
+	p := &poller{
+		queue:   q,
 		fetcher: fetcher,
 		logger:  logger,
 		backoff: &backoff.Backoff{
@@ -104,7 +88,7 @@ func NewPoller(queue Queue, fetcher Fetcher, logger *slog.Logger, meter metric.M
 		queueFullDelay: defaultQueueFullDelay,
 		pollTimeout:    pollTimeout,
 	}
-	if m, err := newPollerMetrics(meter, queue); err != nil {
+	if m, err := newPollerMetrics(meter, q); err != nil {
 		return nil, err
 	} else {
 		p.metrics = m
@@ -113,7 +97,7 @@ func NewPoller(queue Queue, fetcher Fetcher, logger *slog.Logger, meter metric.M
 }
 
 // Run starts the polling loop and blocks until the context is cancelled.
-func (p *Poller) Run(ctx context.Context) {
+func (p *poller) Run(ctx context.Context) {
 	p.logger.InfoContext(ctx, "poller started")
 	defer func() {
 		if err := ctx.Err(); err != nil {
@@ -184,8 +168,14 @@ func (p *Poller) Run(ctx context.Context) {
 
 		enqueued := 0
 		for _, cmd := range commands {
-			p.recordCommandAge(ctx, cmd)
-			if !p.enqueue(ctx, cmd) {
+			tc, ok := cmd.(typedCommand)
+			if !ok || tc.commandType() == "" {
+				p.logger.WarnContext(ctx, "dropping command with unknown type")
+				continue
+			}
+
+			p.recordCommandAge(ctx, tc)
+			if !p.enqueue(ctx, tc) {
 				p.logger.ErrorContext(ctx, "Internal queue is full")
 				//TODO(denyska): add sleep and try to enqueue later
 				break
@@ -207,11 +197,11 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-func (p *Poller) enqueue(ctx context.Context, cmd PolledCommand) bool {
+func (p *poller) enqueue(ctx context.Context, cmd controlplane.PolledCommand) bool {
 	return p.queue.Enqueue(ctx, cmd)
 }
 
-func (p *Poller) availableSlots() int {
+func (p *poller) availableSlots() int {
 	capacity := p.queue.Capacity()
 	if capacity == 0 {
 		// Treat unbuffered channels as having a single available slot to avoid zero limits.
@@ -224,7 +214,7 @@ func (p *Poller) availableSlots() int {
 	return available
 }
 
-func (p *Poller) waitForQueue(ctx context.Context) bool {
+func (p *poller) waitForQueue(ctx context.Context) bool {
 	timer := time.NewTimer(p.queueFullDelay)
 	defer timer.Stop()
 
@@ -236,7 +226,7 @@ func (p *Poller) waitForQueue(ctx context.Context) bool {
 	}
 }
 
-func (p *Poller) sleep(ctx context.Context, d time.Duration) bool {
+func (p *poller) sleep(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
 		d = defaultBackoffMin
 	}
@@ -279,7 +269,7 @@ func queueDropReason(ctx context.Context) string {
 	}
 }
 
-func (p *Poller) recordCommandAge(ctx context.Context, cmd PolledCommand) {
+func (p *poller) recordCommandAge(ctx context.Context, cmd controlplane.PolledCommand) {
 	enqueuedAt := cmd.EnqueuedAt()
 	polledAt := cmd.PolledAt()
 	if enqueuedAt.IsZero() || polledAt.IsZero() {

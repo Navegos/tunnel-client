@@ -14,6 +14,8 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"go.openai.org/api/tunnel-client/pkg/controlplane"
+	"go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
@@ -30,6 +32,9 @@ func (s stubCommand) ShardToken() string         { return "" }
 func (s stubCommand) SessionID() (string, bool) {
 	return "", false
 }
+func (s stubCommand) commandType() wiretypes.CommandType {
+	return wiretypes.CommandTypeJSONRPC
+}
 
 type agedCommand struct {
 	stubCommand
@@ -42,12 +47,12 @@ func (c agedCommand) PolledAt() time.Time   { return c.polledAt }
 
 type recordingFetcher struct {
 	t     *testing.T
-	data  []PolledCommand
+	data  []controlplane.PolledCommand
 	mu    sync.Mutex
 	calls []int
 }
 
-func (f *recordingFetcher) Poll(ctx context.Context, limit int) ([]PolledCommand, types.TunnelServiceRequestID, error) {
+func (f *recordingFetcher) Poll(ctx context.Context, limit int) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
 	if limit <= 0 {
 		f.t.Fatalf("expected positive limit, got %d", limit)
 	}
@@ -64,18 +69,18 @@ func (f *recordingFetcher) Poll(ctx context.Context, limit int) ([]PolledCommand
 		n = len(f.data)
 	}
 
-	out := make([]PolledCommand, n)
+	out := make([]controlplane.PolledCommand, n)
 	copy(out, f.data[:n])
 	f.data = f.data[n:]
 	return out, "", nil
 }
 
 func TestPollerWritesAtMostQueueCapacity(t *testing.T) {
-	queue := make(chan PolledCommand, 2)
+	queue := make(chan controlplane.PolledCommand, 2)
 	queueAdapter := &chanQueue{ch: queue}
 	fetcher := &recordingFetcher{
 		t: t,
-		data: []PolledCommand{
+		data: []controlplane.PolledCommand{
 			stubCommand{id: "1"},
 			stubCommand{id: "2"},
 			stubCommand{id: "3"},
@@ -103,9 +108,9 @@ func TestPollerWritesAtMostQueueCapacity(t *testing.T) {
 		poller.Run(ctx)
 	}()
 
-	received := make([]PolledCommand, 0, 3)
+	received := make([]controlplane.PolledCommand, 0, 3)
 
-	waitForQueue := func() PolledCommand {
+	waitForQueue := func() controlplane.PolledCommand {
 		select {
 		case <-time.After(time.Second):
 			t.Fatal("timed out waiting for command")
@@ -150,7 +155,7 @@ func TestPollerRecordsQueueDropsAndCommandAge(t *testing.T) {
 	queue := &failingQueue{}
 	fetcher := &recordingFetcher{
 		t: t,
-		data: []PolledCommand{
+		data: []controlplane.PolledCommand{
 			agedCommand{
 				stubCommand: stubCommand{id: "1"},
 				enqueuedAt:  time.Now().Add(-3 * time.Second),
@@ -193,7 +198,7 @@ func TestPollerRecordsContextCanceledQueueDrops(t *testing.T) {
 	queue := &cancelingQueue{cancel: cancel}
 	fetcher := &recordingFetcher{
 		t: t,
-		data: []PolledCommand{
+		data: []controlplane.PolledCommand{
 			stubCommand{id: "1"},
 		},
 	}
@@ -227,7 +232,7 @@ func TestPollerRecordsContextCanceledQueueDrops(t *testing.T) {
 }
 
 func TestPollerTagsPollErrors(t *testing.T) {
-	queue := &chanQueue{ch: make(chan PolledCommand, 1)}
+	queue := &chanQueue{ch: make(chan controlplane.PolledCommand, 1)}
 	fetcher := &erroringFetcher{err: context.DeadlineExceeded, pollCh: make(chan struct{}, 1)}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reader := sdkmetric.NewManualReader()
@@ -265,7 +270,7 @@ func TestPollerTagsPollErrors(t *testing.T) {
 }
 
 type chanQueue struct {
-	ch chan PolledCommand
+	ch chan controlplane.PolledCommand
 }
 
 func (q *chanQueue) Capacity() int {
@@ -276,7 +281,7 @@ func (q *chanQueue) Length() int {
 	return len(q.ch)
 }
 
-func (q *chanQueue) Enqueue(ctx context.Context, cmd PolledCommand) bool {
+func (q *chanQueue) Enqueue(ctx context.Context, cmd controlplane.PolledCommand) bool {
 	select {
 	case <-ctx.Done():
 		return false
@@ -293,9 +298,9 @@ func (q *chanQueue) Enqueue(ctx context.Context, cmd PolledCommand) bool {
 
 type failingQueue struct{}
 
-func (f *failingQueue) Capacity() int                               { return 1 }
-func (f *failingQueue) Length() int                                 { return 0 }
-func (f *failingQueue) Enqueue(context.Context, PolledCommand) bool { return false }
+func (f *failingQueue) Capacity() int                                            { return 1 }
+func (f *failingQueue) Length() int                                              { return 0 }
+func (f *failingQueue) Enqueue(context.Context, controlplane.PolledCommand) bool { return false }
 
 type cancelingQueue struct {
 	cancel context.CancelFunc
@@ -303,7 +308,7 @@ type cancelingQueue struct {
 
 func (c *cancelingQueue) Capacity() int { return 1 }
 func (c *cancelingQueue) Length() int   { return 0 }
-func (c *cancelingQueue) Enqueue(ctx context.Context, _ PolledCommand) bool {
+func (c *cancelingQueue) Enqueue(ctx context.Context, _ controlplane.PolledCommand) bool {
 	if c.cancel != nil {
 		c.cancel()
 	}
@@ -555,7 +560,7 @@ type erroringFetcher struct {
 	pollCh chan struct{}
 }
 
-func (f *erroringFetcher) Poll(ctx context.Context, limit int) ([]PolledCommand, types.TunnelServiceRequestID, error) {
+func (f *erroringFetcher) Poll(ctx context.Context, limit int) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
 	if f.pollCh != nil {
 		select {
 		case f.pollCh <- struct{}{}:
@@ -577,7 +582,7 @@ func (f *erroringFetcher) waitForPoll(t *testing.T) {
 	}
 }
 
-func (f *timeoutRecordingFetcher) Poll(ctx context.Context, limit int) ([]PolledCommand, types.TunnelServiceRequestID, error) {
+func (f *timeoutRecordingFetcher) Poll(ctx context.Context, limit int) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
 	start := time.Now()
 	<-ctx.Done()
 
@@ -589,7 +594,7 @@ func (f *timeoutRecordingFetcher) Poll(ctx context.Context, limit int) ([]Polled
 }
 
 func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
-	queue := &chanQueue{ch: make(chan PolledCommand, 1)}
+	queue := &chanQueue{ch: make(chan controlplane.PolledCommand, 1)}
 	fetcher := &timeoutRecordingFetcher{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reader := sdkmetric.NewManualReader()

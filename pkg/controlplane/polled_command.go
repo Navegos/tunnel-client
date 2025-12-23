@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -30,6 +31,15 @@ type PolledCommand interface {
 	// SessionID returns the optional MCP session identifier when the connector
 	// supplied it, along with a boolean indicating whether it was present.
 	SessionID() (string, bool)
+}
+
+// Fetcher abstracts the control-plane poll endpoint. Implementations should
+// honor the provided limit and return at most that many commands so the poller
+// can respect downstream backpressure. TunnelServiceRequestID is returned so
+// callers can log/trace the control-plane request identifier associated with
+// the poll.
+type Fetcher interface {
+	Poll(ctx context.Context, limit int) ([]PolledCommand, types.TunnelServiceRequestID, error)
 }
 
 // JsonRpcCommand augments PolledCommand with access to the JSON-RPC message.
