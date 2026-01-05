@@ -80,3 +80,5 @@ type oauthDiscoveryCommand struct {
 func (c *oauthDiscoveryCommand) commandType() wiretypes.CommandType {
 	return wiretypes.CommandTypeOAuthDiscovery
 }
+
+func (c *oauthDiscoveryCommand) IsOAuthDiscovery() bool { return true }

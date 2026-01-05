@@ -21,6 +21,8 @@ const (
 	defaultBackoffMin     = 200 * time.Millisecond
 	defaultBackoffMax     = 10 * time.Second
 	defaultPollerTimeout  = 30 * time.Second
+
+	dropReasonInvalidCommandType = "invalid_command_type"
 )
 
 // queue exposes the minimal methods the poller needs from the dispatcher queue.
@@ -167,17 +169,30 @@ func (p *poller) Run(ctx context.Context) {
 		}
 
 		enqueued := 0
-		for _, cmd := range commands {
+		droppedInvalidType := 0
+		droppedContextClosed := 0
+		for idx, cmd := range commands {
 			tc, ok := cmd.(typedCommand)
 			if !ok || tc.commandType() == "" {
 				p.logger.WarnContext(ctx, "dropping command with unknown type")
+				droppedInvalidType++
 				continue
 			}
 
 			p.recordCommandAge(ctx, tc)
-			if !p.enqueue(ctx, tc) {
-				p.logger.ErrorContext(ctx, "Internal queue is full")
-				//TODO(denyska): add sleep and try to enqueue later
+			if !p.enqueueWithBackpressure(ctx, tc) {
+				// We already pulled this command from the control-plane; if the client is
+				// shutting down we can't safely block forever. Count the remaining
+				// commands as dropped due to context closure.
+				droppedContextClosed++
+				for _, rest := range commands[idx+1:] {
+					restTC, ok := rest.(typedCommand)
+					if !ok || restTC.commandType() == "" {
+						droppedInvalidType++
+						continue
+					}
+					droppedContextClosed++
+				}
 				break
 			}
 			enqueued++
@@ -185,9 +200,11 @@ func (p *poller) Run(ctx context.Context) {
 
 		p.metrics.totalCommandsPolled.Add(ctx, int64(pulled))
 		p.metrics.totalCommandsEnqueued.Add(ctx, int64(enqueued))
-		if enqueued < pulled {
-			dropped := pulled - enqueued
-			p.metrics.queueDrops.Add(ctx, int64(dropped), metric.WithAttributes(attribute.String(attributeKeyDropReason, queueDropReason(ctx))))
+		if droppedInvalidType > 0 {
+			p.metrics.queueDrops.Add(ctx, int64(droppedInvalidType), metric.WithAttributes(attribute.String(attributeKeyDropReason, dropReasonInvalidCommandType)))
+		}
+		if droppedContextClosed > 0 {
+			p.metrics.queueDrops.Add(ctx, int64(droppedContextClosed), metric.WithAttributes(attribute.String(attributeKeyDropReason, dropReasonContextClosed)))
 		}
 
 		p.logger.DebugContext(ctx, "poll cycle complete",
@@ -199,6 +216,22 @@ func (p *poller) Run(ctx context.Context) {
 
 func (p *poller) enqueue(ctx context.Context, cmd controlplane.PolledCommand) bool {
 	return p.queue.Enqueue(ctx, cmd)
+}
+
+func (p *poller) enqueueWithBackpressure(ctx context.Context, cmd controlplane.PolledCommand) bool {
+	for {
+		if ctx.Err() != nil {
+			return false
+		}
+
+		if p.enqueue(ctx, cmd) {
+			return true
+		}
+
+		if !p.waitForQueue(ctx) {
+			return false
+		}
+	}
 }
 
 func (p *poller) availableSlots() int {
@@ -253,19 +286,6 @@ func pollErrorKind(err error) string {
 			return errorKindTimeout
 		}
 		return errorKindOther
-	}
-}
-
-func queueDropReason(ctx context.Context) string {
-	if ctx == nil {
-		return dropReasonQueueFull
-	}
-
-	switch ctx.Err() {
-	case context.Canceled, context.DeadlineExceeded:
-		return dropReasonContextClosed
-	default:
-		return dropReasonQueueFull
 	}
 }
 

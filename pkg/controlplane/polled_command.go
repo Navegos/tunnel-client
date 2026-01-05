@@ -54,6 +54,10 @@ type JsonRpcCommand interface {
 // type differentiation and future extension.
 type OauthDiscoveryCommand interface {
 	PolledCommand
+	// IsOAuthDiscovery returns true for OAuth discovery commands. It exists to
+	// make the discriminator explicit; without it, any PolledCommand would satisfy
+	// this interface and could be accidentally treated as an OAuth discovery request.
+	IsOAuthDiscovery() bool
 }
 
 // PolledCommandQueue carries polled commands between the control plane poller and dispatcher.

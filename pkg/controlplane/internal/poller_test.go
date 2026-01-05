@@ -186,9 +186,75 @@ func TestPollerRecordsQueueDropsAndCommandAge(t *testing.T) {
 	}
 
 	assertCounterValue(t, rm, metricNameCommandsPolled, 1)
-	assertCounterValueWithAttributes(t, rm, metricNameCommandsQueueDrops, attribute.String(attributeKeyDropReason, dropReasonQueueFull), 1)
+	assertCounterValueWithAttributes(t, rm, metricNameCommandsQueueDrops, attribute.String(attributeKeyDropReason, dropReasonContextClosed), 1)
 	assertHistogramCount(t, rm, metricNameCommandsAge, 1)
 	assertHistogramSumWithAttributes(t, rm, metricNameCommandsAge, attribute.KeyValue{}, 3)
+}
+
+type untypedCommand struct {
+	id types.RequestID
+}
+
+func (u untypedCommand) RequestID() types.RequestID { return u.id }
+func (u untypedCommand) Message() jsonrpc.Message   { return &jsonrpc.Request{Method: "noop"} }
+func (u untypedCommand) EnqueuedAt() time.Time      { return time.Time{} }
+func (u untypedCommand) PolledAt() time.Time        { return time.Time{} }
+func (u untypedCommand) Headers() http.Header       { return nil }
+func (u untypedCommand) ShardToken() string         { return "" }
+func (u untypedCommand) SessionID() (string, bool)  { return "", false }
+
+func TestPollerRecordsInvalidCommandTypeDrops(t *testing.T) {
+	queueCh := make(chan controlplane.PolledCommand, 2)
+	queue := &chanQueue{ch: queueCh}
+	fetcher := &recordingFetcher{
+		t: t,
+		data: []controlplane.PolledCommand{
+			untypedCommand{id: "bad"},
+			stubCommand{id: "ok"},
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer func() {
+		_ = meterProvider.Shutdown(context.Background())
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0)
+	if err != nil {
+		t.Fatalf("new poller: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		poller.Run(ctx)
+	}()
+
+	select {
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for enqueued command")
+	case got := <-queueCh:
+		if got.RequestID() != "ok" {
+			t.Fatalf("unexpected enqueued command id: got %q, want %q", got.RequestID(), "ok")
+		}
+	}
+
+	cancel()
+	wg.Wait()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	assertCounterValue(t, rm, metricNameCommandsPolled, 2)
+	assertCounterValue(t, rm, metricNameCommandsEnqueued, 1)
+	assertCounterValueWithAttributes(t, rm, metricNameCommandsQueueDrops, attribute.String(attributeKeyDropReason, dropReasonInvalidCommandType), 1)
 }
 
 func TestPollerRecordsContextCanceledQueueDrops(t *testing.T) {

@@ -680,7 +680,7 @@ func TestTunnelServiceClientExtraHeadersWarnOnOverride(t *testing.T) {
 	assert.Equal(t, "Accept", handler.header, "expected warning for Accept header")
 }
 
-func TestTunnelServiceClientWarnsWhenDroppingCommandsByLimit(t *testing.T) {
+func TestTunnelServiceClientWarnsWhenServerExceedsLimit(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -723,7 +723,7 @@ func TestTunnelServiceClientWarnsWhenDroppingCommandsByLimit(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 
-	// Capture warnings
+	// Capture warnings/errors.
 	var cap dropWarnCapture
 	logger := slog.New(&dropWarnHandler{cap: &cap})
 
@@ -744,11 +744,10 @@ func TestTunnelServiceClientWarnsWhenDroppingCommandsByLimit(t *testing.T) {
 	if !assert.NoError(t, err, "Poll failed") {
 		return
 	}
-	// Only one command should be returned due to limit.
-	assert.Len(t, cmds, 1)
+	// Server returning more than requested should be logged, but we should not drop commands.
+	assert.Len(t, cmds, 3)
 
-	assert.True(t, cap.seen, "expected warning when commands are dropped by limit")
-	assert.Equal(t, 2, cap.dropped)
+	assert.True(t, cap.seen, "expected warning/error when server returns more than requested limit")
 	assert.Equal(t, 1, cap.limit)
 	assert.Equal(t, 3, cap.total)
 }
@@ -762,16 +761,10 @@ func (h *dropWarnHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *dropWarnHandler) Handle(ctx context.Context, r slog.Record) error {
-	if r.Level == slog.LevelWarn && r.Message == "control-plane commands dropped due to limit" {
+	if r.Message == "control-plane returned more commands than requested limit" {
 		h.cap.seen = true
 		r.Attrs(func(a slog.Attr) bool {
 			switch a.Key {
-			case "dropped":
-				if v, ok := a.Value.Any().(int); ok {
-					h.cap.dropped = v
-				} else if a.Value.Kind() == slog.KindInt64 {
-					h.cap.dropped = int(a.Value.Int64())
-				}
 			case "limit":
 				if v, ok := a.Value.Any().(int); ok {
 					h.cap.limit = v
@@ -795,10 +788,9 @@ func (h *dropWarnHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
 func (h *dropWarnHandler) WithGroup(name string) slog.Handler       { return h }
 
 type dropWarnCapture struct {
-	seen    bool
-	dropped int
-	limit   int
-	total   int
+	seen  bool
+	limit int
+	total int
 }
 
 func newDiscardLogger() *slog.Logger {
@@ -1000,4 +992,174 @@ func TestTunnelServiceClientPollReturnsOauthDiscoveryCommand(t *testing.T) {
 	type hasMessage interface{ Message() jsonrpc.Message }
 	_, ok := cmd.(hasMessage)
 	assert.False(t, ok, "oauth discovery command should not expose Message()")
+}
+
+func TestNewTunnelServiceClientValidatesInputs(t *testing.T) {
+	t.Parallel()
+
+	baseURL := mustParseURL(t, "https://example.com")
+	logger := newDiscardLogger()
+
+	t.Run("NilConfig", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewTunnelServiceClient(context.Background(), nil, logger, &config.LoggingConfig{}, testMeterProvider)
+		require.ErrorIs(t, err, errMissingConfig)
+	})
+
+	t.Run("MissingBaseURL", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+			BaseURL:  nil,
+			TunnelID: "tunnel",
+			APIKey:   "key",
+		}, logger, &config.LoggingConfig{}, testMeterProvider)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "control-plane.base-url is required")
+	})
+
+	t.Run("MissingTunnelID", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+			BaseURL: baseURL,
+			APIKey:  "key",
+		}, logger, &config.LoggingConfig{}, testMeterProvider)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "control-plane.tunnel-id is required")
+	})
+
+	t.Run("MissingAPIKey", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+			BaseURL:  baseURL,
+			TunnelID: "tunnel",
+		}, logger, &config.LoggingConfig{}, testMeterProvider)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "control-plane.api-key is required")
+	})
+
+	t.Run("NilMeterProvider", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+			BaseURL:  baseURL,
+			TunnelID: "tunnel",
+			APIKey:   "key",
+		}, logger, &config.LoggingConfig{}, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "meter provider is required")
+	})
+
+	t.Run("NilLogger", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+			BaseURL:  baseURL,
+			TunnelID: "tunnel",
+			APIKey:   "key",
+		}, nil, &config.LoggingConfig{}, testMeterProvider)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "logger is required")
+	})
+}
+
+func TestTunnelServiceClientPostResponseValidatesArgs(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("server should not be called")
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID("cli-tunnel"),
+		APIKey:      "test-api-key",
+		PollTimeout: time.Second,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err)
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), "shard-required")
+
+	_, err = client.PostResponse(ctx, "", &types.TunnelResponse{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requestID is required")
+
+	_, err = client.PostResponse(ctx, types.RequestID("req"), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "response is required")
+}
+
+func TestTunnelServiceClientPostResponseErrorsWithoutShardToken(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("server should not be called")
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID("cli-tunnel"),
+		APIKey:      "test-api-key",
+		PollTimeout: time.Second,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err)
+
+	resp := types.NewNotificationAck(http.StatusOK, http.Header{})
+
+	_, err = client.PostResponse(context.Background(), types.RequestID("req"), resp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "shard token is required")
+}
+
+func TestTunnelServiceClientPostResponseReturnsTunnelServiceRequestIDFromHeader(t *testing.T) {
+	t.Parallel()
+
+	const wantTSRID = "tsrid-123"
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", wantTSRID)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID("cli-tunnel"),
+		APIKey:      "test-api-key",
+		PollTimeout: time.Second,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err)
+
+	ctx := tunnelctx.ContextWithShardToken(context.Background(), "shard-token")
+	resp := types.NewNotificationAck(http.StatusOK, http.Header{})
+
+	got, err := client.PostResponse(ctx, types.RequestID("req"), resp)
+	require.NoError(t, err)
+	require.Equal(t, types.TunnelServiceRequestID(wantTSRID), got)
+}
+
+func TestTunnelServiceClientPollReturnsTunnelServiceRequestIDFromHeader(t *testing.T) {
+	t.Parallel()
+
+	const wantTSRID = "tsrid-poll-1"
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", wantTSRID)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID("cli-tunnel"),
+		APIKey:      "test-api-key",
+		PollTimeout: time.Second,
+	}, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err)
+
+	cmds, gotTSRID, err := client.Poll(context.Background(), 1)
+	require.NoError(t, err)
+	require.Nil(t, cmds)
+	require.Equal(t, types.TunnelServiceRequestID(wantTSRID), gotTSRID)
 }

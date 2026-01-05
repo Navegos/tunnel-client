@@ -2,6 +2,7 @@ package dispatcherinternal
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -64,6 +65,73 @@ func TestQueueListenerProcessesCommands(t *testing.T) {
 	listener.Wait()
 
 	processor.requireCalls(t, commandCount)
+}
+
+func TestNewQueueListenerValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	processor := &stubProcessor{}
+	queue := make(controlplane.PolledCommandQueue, 1)
+	mcpConfig := newTestMCPConfigQueue(t, 1)
+	meterProvider := newManualMeterProvider(t)
+
+	tests := []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "nil_logger",
+			fn: func() error {
+				_, err := NewQueueListener(nil, processor, queue, mcpConfig, meterProvider)
+				return err
+			},
+		},
+		{
+			name: "nil_processor",
+			fn: func() error {
+				_, err := NewQueueListener(logger, nil, queue, mcpConfig, meterProvider)
+				return err
+			},
+		},
+		{
+			name: "nil_queue",
+			fn: func() error {
+				_, err := NewQueueListener(logger, processor, nil, mcpConfig, meterProvider)
+				return err
+			},
+		},
+		{
+			name: "nil_config",
+			fn: func() error {
+				_, err := NewQueueListener(logger, processor, queue, nil, meterProvider)
+				return err
+			},
+		},
+		{
+			name: "non_positive_max_concurrent",
+			fn: func() error {
+				cfg := *mcpConfig
+				cfg.MaxConcurrentRequests = 0
+				_, err := NewQueueListener(logger, processor, queue, &cfg, meterProvider)
+				return err
+			},
+		},
+		{
+			name: "nil_meter_provider",
+			fn: func() error {
+				_, err := NewQueueListener(logger, processor, queue, mcpConfig, nil)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, tc.fn())
+		})
+	}
 }
 
 func TestQueueListenerWaitBlocksUntilTasksComplete(t *testing.T) {
@@ -165,6 +233,32 @@ func TestQueueListenerRecordsWorkerOccupancyMetrics(t *testing.T) {
 
 	listener.Wait()
 	processor.requireCalls(t, 1)
+}
+
+func TestQueueListenerMetricsValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	_, err := newQueueListenerMetrics(nil, &fakeWorkerPool{capacity: 1})
+	require.Error(t, err)
+
+	meterProvider := newManualMeterProvider(t)
+	meter := meterProvider.Meter("dispatcher")
+	_, err = newQueueListenerMetrics(meter, nil)
+	require.Error(t, err)
+}
+
+func TestNewQueueListenerRejectsNilPoolFactory(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	processor := &stubProcessor{}
+	queue := make(controlplane.PolledCommandQueue, 1)
+	mcpConfig := newTestMCPConfigQueue(t, 1)
+	meterProvider := newManualMeterProvider(t)
+
+	_, err := newQueueListener(logger, processor, queue, mcpConfig, meterProvider, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil pool factory")
 }
 
 func newTestMCPConfigQueue(t *testing.T, maxConcurrent int) *config.MCPConfig {
@@ -327,3 +421,120 @@ func findGaugeValue(rm metricdata.ResourceMetrics, name string) (int64, bool) {
 	}
 	return 0, false
 }
+
+func TestQueueListenerFallsBackToInlineProcessingOnSubmitFailure(t *testing.T) {
+	t.Parallel()
+
+	processor := &stubProcessor{}
+	mcpConfig := newTestMCPConfigQueue(t, 1)
+	meterProvider := newManualMeterProvider(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	queue := make(controlplane.PolledCommandQueue, 2)
+
+	pool := &fakeWorkerPool{
+		submitErr: errors.New("submit failed"),
+		capacity:  mcpConfig.MaxConcurrentRequests,
+	}
+
+	listener, err := newQueueListener(logger, processor, queue, mcpConfig, meterProvider, func(maxConcurrent int) (workerPool, error) {
+		require.Equal(t, mcpConfig.MaxConcurrentRequests, maxConcurrent)
+		return pool, nil
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener.Start(ctx)
+	queue <- newTestCommand(0)
+	queue <- newTestCommand(1)
+	close(queue)
+	listener.Wait()
+
+	processor.requireCalls(t, 2)
+	require.EqualValues(t, 1, pool.releaseCalls, "expected ReleaseTimeout to be called on shutdown")
+}
+
+func TestQueueListenerReleaseTimeoutErrorDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	processor := &stubProcessor{}
+	mcpConfig := newTestMCPConfigQueue(t, 1)
+	meterProvider := newManualMeterProvider(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	queue := make(controlplane.PolledCommandQueue, 1)
+
+	pool := &fakeWorkerPool{
+		releaseErr: errors.New("release failed"),
+		capacity:   mcpConfig.MaxConcurrentRequests,
+	}
+
+	listener, err := newQueueListener(logger, processor, queue, mcpConfig, meterProvider, func(int) (workerPool, error) {
+		return pool, nil
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener.Start(ctx)
+	close(queue)
+	listener.Wait()
+
+	require.EqualValues(t, 1, pool.releaseCalls)
+}
+
+func TestQueueListenerStopsOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	processor := &stubProcessor{}
+	mcpConfig := newTestMCPConfigQueue(t, 1)
+	meterProvider := newManualMeterProvider(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	queue := make(controlplane.PolledCommandQueue)
+
+	pool := &fakeWorkerPool{capacity: mcpConfig.MaxConcurrentRequests}
+	listener, err := newQueueListener(logger, processor, queue, mcpConfig, meterProvider, func(int) (workerPool, error) {
+		return pool, nil
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	listener.Start(ctx)
+	cancel()
+
+	listener.Wait()
+
+	require.EqualValues(t, 1, pool.releaseCalls)
+}
+
+type fakeWorkerPool struct {
+	submitErr  error
+	releaseErr error
+
+	capacity int
+	running  int
+
+	submitCalls  int
+	releaseCalls int
+}
+
+func (p *fakeWorkerPool) Submit(task func()) error {
+	p.submitCalls++
+	if p.submitErr != nil {
+		return p.submitErr
+	}
+	if task != nil {
+		task()
+	}
+	return nil
+}
+
+func (p *fakeWorkerPool) ReleaseTimeout(time.Duration) error {
+	p.releaseCalls++
+	return p.releaseErr
+}
+
+func (p *fakeWorkerPool) Cap() int { return p.capacity }
+
+func (p *fakeWorkerPool) Running() int { return p.running }

@@ -46,6 +46,10 @@ const (
 // NewLogger constructs a slog.Logger configured according to the provided config.
 // It returns the logger along with an optional closer that must be closed by the caller.
 func NewLogger(cfg *config.LoggingConfig, defaultWriter io.Writer) (*slog.Logger, io.Closer, error) {
+	if cfg == nil {
+		return nil, nil, fmt.Errorf("logging config is nil")
+	}
+
 	var logger *slog.Logger
 	writer := defaultWriter
 	var closer io.Closer

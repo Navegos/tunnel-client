@@ -19,13 +19,36 @@ import (
 
 const poolReleaseTimeout = 10 * time.Second
 
+type workerPool interface {
+	Submit(func()) error
+	ReleaseTimeout(time.Duration) error
+	Cap() int
+	Running() int
+}
+
+type antsWorkerPool struct {
+	base *ants.Pool
+}
+
+func (p *antsWorkerPool) Submit(task func()) error {
+	return p.base.Submit(task)
+}
+
+func (p *antsWorkerPool) ReleaseTimeout(timeout time.Duration) error {
+	return p.base.ReleaseTimeout(timeout)
+}
+
+func (p *antsWorkerPool) Cap() int { return p.base.Cap() }
+
+func (p *antsWorkerPool) Running() int { return p.base.Running() }
+
 // QueueListener drains the polled command queue and forwards work to the processor
 // using a bounded worker pool.
 type QueueListener struct {
 	logger    *slog.Logger
 	processor Processor
 	queue     controlplane.PolledCommandQueue
-	pool      *ants.Pool
+	pool      workerPool
 	metrics   *queueListenerMetrics
 
 	listenerWG sync.WaitGroup
@@ -36,7 +59,7 @@ type queueListenerMetrics struct {
 	workerPoolOccupancy metric.Int64ObservableGauge
 }
 
-func newQueueListenerMetrics(meter metric.Meter, pool *ants.Pool) (*queueListenerMetrics, error) {
+func newQueueListenerMetrics(meter metric.Meter, pool workerPool) (*queueListenerMetrics, error) {
 	if meter == nil {
 		return nil, fmt.Errorf("dispatcher queue listener: nil meter")
 	}
@@ -76,8 +99,20 @@ func newQueueListenerMetrics(meter metric.Meter, pool *ants.Pool) (*queueListene
 	}, nil
 }
 
+type poolFactory func(maxConcurrent int) (workerPool, error)
+
 // NewQueueListener constructs a QueueListener with a worker pool sized according to the MCP configuration.
 func NewQueueListener(logger *slog.Logger, processor Processor, queue controlplane.PolledCommandQueue, mcpConfig *config.MCPConfig, meterProvider *sdkmetric.MeterProvider) (*QueueListener, error) {
+	return newQueueListener(logger, processor, queue, mcpConfig, meterProvider, func(maxConcurrent int) (workerPool, error) {
+		pool, err := ants.NewPool(maxConcurrent)
+		if err != nil {
+			return nil, fmt.Errorf("dispatcher queue listener: create worker pool: %w", err)
+		}
+		return &antsWorkerPool{base: pool}, nil
+	})
+}
+
+func newQueueListener(logger *slog.Logger, processor Processor, queue controlplane.PolledCommandQueue, mcpConfig *config.MCPConfig, meterProvider *sdkmetric.MeterProvider, makePool poolFactory) (*QueueListener, error) {
 	if logger == nil {
 		return nil, fmt.Errorf("dispatcher queue listener: nil logger")
 	}
@@ -97,9 +132,13 @@ func NewQueueListener(logger *slog.Logger, processor Processor, queue controlpla
 		return nil, fmt.Errorf("dispatcher queue listener: nil meter provider")
 	}
 
-	pool, err := ants.NewPool(mcpConfig.MaxConcurrentRequests)
+	if makePool == nil {
+		return nil, fmt.Errorf("dispatcher queue listener: nil pool factory")
+	}
+
+	pool, err := makePool(mcpConfig.MaxConcurrentRequests)
 	if err != nil {
-		return nil, fmt.Errorf("dispatcher queue listener: create worker pool: %w", err)
+		return nil, err
 	}
 
 	baseLogger := logger.With(tclog.FieldComponent, tclog.ComponentDispatcher)
@@ -164,7 +203,13 @@ func (l *QueueListener) run(ctx context.Context) {
 			}); err != nil {
 				cmdLogger.ErrorContext(cmdCtx, "failed to submit polled command to worker pool",
 					slog.String("error", err.Error()))
-				return
+				// We already pulled the command off the queue, and tunnel-service will not re-deliver.
+				// Fall back to processing in-line to avoid dropping the request on the floor.
+				if err := l.processor.Process(cmdCtx, cmdCopy); err != nil {
+					cmdLogger.WarnContext(cmdCtx, "failed to process polled command (inline fallback after submit failure)",
+						slog.String("error", err.Error()))
+				}
+				continue
 			}
 		}
 	}

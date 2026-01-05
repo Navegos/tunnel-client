@@ -63,3 +63,100 @@ func TestForwardingRoundTripperInjectsAndCapturesHeaders(t *testing.T) {
 		t.Fatalf("response status mismatch: got %d, want %d", status, http.StatusOK)
 	}
 }
+
+func TestContextWithHeadersRejectsNilContext(t *testing.T) {
+	t.Helper()
+
+	//lint:ignore SA1012 This intentionally passes a nil context to cover the explicit nil-guard.
+	_, _, err := ContextWithHeaders(nil, http.Header{"X": {"y"}})
+	if err == nil {
+		t.Fatal("expected error for nil context")
+	}
+}
+
+func TestHeaderCarrierRequestHeadersAreCloned(t *testing.T) {
+	t.Helper()
+
+	orig := http.Header{"X-Test": {"a", "b"}}
+	_, carrier, err := ContextWithHeaders(context.Background(), orig)
+	if err != nil {
+		t.Fatalf("ContextWithHeaders: %v", err)
+	}
+
+	orig.Set("X-Test", "mutated")
+
+	got := carrier.RequestHeaders()
+	if got.Get("X-Test") == "mutated" {
+		t.Fatal("expected request headers to be cloned from input")
+	}
+}
+
+func TestHeaderCarrierApplyRequestHeadersOverridesExisting(t *testing.T) {
+	t.Helper()
+
+	_, carrier, err := ContextWithHeaders(context.Background(), http.Header{"X-Test": {"a", "b"}})
+	if err != nil {
+		t.Fatalf("ContextWithHeaders: %v", err)
+	}
+
+	dst := http.Header{"X-Test": {"old"}, "Other": {"keep"}}
+	carrier.ApplyRequestHeaders(dst)
+
+	if got := dst.Values("X-Test"); cmp.Diff([]string{"a", "b"}, got, cmpopts.SortSlices(func(a, b string) bool { return a < b })) != "" {
+		t.Fatalf("ApplyRequestHeaders did not override values for X-Test, got %v", got)
+	}
+	if dst.Get("Other") != "keep" {
+		t.Fatalf("ApplyRequestHeaders unexpectedly modified other headers: %v", dst)
+	}
+}
+
+func TestHeaderCarrierStoreAndReturnResponseHeadersAreCloned(t *testing.T) {
+	t.Helper()
+
+	_, carrier, err := ContextWithHeaders(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ContextWithHeaders: %v", err)
+	}
+
+	respHdr := http.Header{"X-Resp": {"ok"}}
+	carrier.StoreResponse(201, respHdr)
+	respHdr.Set("X-Resp", "mutated")
+
+	code, got := carrier.ResponseStatusAndHeaders()
+	if code != 201 {
+		t.Fatalf("status code mismatch: got %d, want %d", code, 201)
+	}
+	if got.Get("X-Resp") == "mutated" {
+		t.Fatal("expected stored response headers to be cloned")
+	}
+
+	// Ensure returned headers are also defensive copies.
+	got.Set("X-Resp", "changed-again")
+	_, got2 := carrier.ResponseStatusAndHeaders()
+	if got2.Get("X-Resp") == "changed-again" {
+		t.Fatal("expected ResponseStatusAndHeaders to return a defensive copy")
+	}
+}
+
+func TestHeaderCarrierNilIsSafe(t *testing.T) {
+	t.Helper()
+
+	var carrier *HeaderCarrier
+	carrier.ApplyRequestHeaders(http.Header{})
+	carrier.StoreResponse(200, http.Header{"X": {"y"}})
+	if code, hdr := carrier.ResponseStatusAndHeaders(); code != 0 || hdr != nil {
+		t.Fatalf("expected nil carrier to return zero values, got (%d, %v)", code, hdr)
+	}
+	if carrier.RequestHeaders() != nil {
+		t.Fatal("expected nil carrier RequestHeaders to return nil")
+	}
+}
+
+func TestCarrierFromContextNilIsSafe(t *testing.T) {
+	t.Helper()
+
+	//lint:ignore SA1012 This intentionally passes a nil context to ensure CarrierFromContext does not panic.
+	if CarrierFromContext(nil) != nil {
+		t.Fatal("expected nil carrier for nil context")
+	}
+}

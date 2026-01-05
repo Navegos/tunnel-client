@@ -3,12 +3,17 @@ package log_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 
+	"go.openai.org/api/tunnel-client/pkg/config"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
 	"go.openai.org/api/tunnel-client/pkg/types"
@@ -83,3 +88,103 @@ func TestLoggingContextHelpers(t *testing.T) {
 		}
 	})
 }
+
+func TestNewLoggerRejectsFileWithUnsetFormat(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.LoggingConfig{
+		Format: config.LogFormatUnset,
+		File:   "/tmp/should-not-be-opened",
+	}
+
+	_, _, err := tclog.NewLogger(cfg, io.Discard)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+}
+
+func TestNewLoggerEmitsRawHTTPWarning(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cfg := &config.LoggingConfig{
+		Format:        config.LogFormatStructText,
+		Level:         slog.LevelInfo,
+		HTTPRawUnsafe: true,
+	}
+
+	_, closer, err := tclog.NewLogger(cfg, &buf)
+	if err != nil {
+		t.Fatalf("NewLogger returned error: %v", err)
+	}
+	tclog.CloseIfNeeded(closer)
+
+	if !strings.Contains(buf.String(), "Raw HTTP logging enabled") {
+		t.Fatalf("expected raw HTTP warning in logs, got: %s", buf.String())
+	}
+}
+
+func TestNewLoggerWritesToFileAndCloses(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "test.log")
+
+	cfg := &config.LoggingConfig{
+		Format: config.LogFormatJSON,
+		Level:  slog.LevelInfo,
+		File:   logPath,
+	}
+
+	logger, closer, err := tclog.NewLogger(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewLogger returned error: %v", err)
+	}
+	logger.Info("hello", slog.String("k", "v"))
+	tclog.CloseIfNeeded(closer)
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatalf("expected log file to contain data")
+	}
+}
+
+func TestNewLoggerRejectsUnsupportedFormat(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.LoggingConfig{
+		Format: config.LogFormat(99),
+		Level:  slog.LevelInfo,
+	}
+
+	_, _, err := tclog.NewLogger(cfg, io.Discard)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+}
+
+func TestNewLoggerRejectsNilConfig(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := tclog.NewLogger(nil, io.Discard)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestCloseIfNeededHandlesErrors(t *testing.T) {
+	t.Parallel()
+
+	tclog.CloseIfNeeded(nil)
+
+	tclog.CloseIfNeeded(&errorCloser{err: errors.New("close failed")})
+}
+
+type errorCloser struct {
+	err error
+}
+
+func (c *errorCloser) Close() error { return c.err }

@@ -2,6 +2,8 @@ package health
 
 import (
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
@@ -58,6 +60,48 @@ func TestBuildHealthURLAssignsRandomPort(t *testing.T) {
 		require.Equal(t, portString(t, ln.Addr()), parsed.Port())
 	})
 }
+
+func TestBuildHealthURLRejectsNonTCPAddr(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildHealthURL(":0", fakeAddr{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expected *net.TCPAddr")
+}
+
+func TestPreferredHealthHostUsesListenerIPWhenListenAddrHostUnspecified(t *testing.T) {
+	t.Parallel()
+
+	host := preferredHealthHost(":0", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.Equal(t, "127.0.0.1", host)
+}
+
+func TestIsUnspecifiedHost(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isUnspecifiedHost("0.0.0.0"))
+	require.True(t, isUnspecifiedHost("::"))
+	require.False(t, isUnspecifiedHost("127.0.0.1"))
+	require.False(t, isUnspecifiedHost("localhost"))
+}
+
+func TestOkHandler(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	okHandler("live")(rec, req)
+
+	res := rec.Result()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Contains(t, res.Header.Get("Content-Type"), "text/plain")
+}
+
+type fakeAddr struct{}
+
+func (fakeAddr) Network() string { return "fake" }
+func (fakeAddr) String() string  { return "fake" }
 
 func mustBuildHealthURL(t *testing.T, listenAddr string, addr net.Addr) string {
 	t.Helper()

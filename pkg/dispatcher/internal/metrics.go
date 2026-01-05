@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	metricNameCommandEndToEndLatency = "command_end_to_end_latency_seconds"
+	metricNameCommandEndToEndLatency = "command_end_to_end_latency_milliseconds"
 )
 
 type processorMetrics struct {

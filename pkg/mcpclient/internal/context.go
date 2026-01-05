@@ -37,6 +37,9 @@ func ContextWithHeaders(ctx context.Context, headers http.Header) (context.Conte
 // CarrierFromContext extracts the header carrier embedded in the context, if
 // present.
 func CarrierFromContext(ctx context.Context) *HeaderCarrier {
+	if ctx == nil {
+		return nil
+	}
 	carrier, _ := ctx.Value(ctxKey{}).(*HeaderCarrier)
 	return carrier
 }

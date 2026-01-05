@@ -266,23 +266,20 @@ func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, l
 		return nil, nil
 	}
 
-	// If the server returned more commands than our configured limit, drop the extras
-	// and emit a warning with details for observability.
+	// The poll limit is a request hint to tunnel-service. If the server returns more
+	// commands than requested, we MUST NOT drop them here: tunnel-service may not
+	// re-deliver and dropping would lose requests. Log for observability and process
+	// everything we received.
 	total := len(rawCommands)
-	dropped := 0
 	if total > limited {
-		dropped = total - limited
-		rawCommands = rawCommands[:limited]
-	}
-
-	logger := tclog.LoggerWithContextIdentifiers(ctx, c.logger)
-	if dropped > 0 {
-		logger.WarnContext(ctx, "control-plane commands dropped due to limit",
-			slog.Int("dropped", dropped),
+		logger := tclog.LoggerWithContextIdentifiers(ctx, c.logger)
+		logger.ErrorContext(ctx, "control-plane returned more commands than requested limit",
 			slog.Int("limit", limited),
 			slog.Int("total", total),
 		)
 	}
+
+	logger := tclog.LoggerWithContextIdentifiers(ctx, c.logger)
 	out := make([]controlplane.PolledCommand, 0, len(rawCommands))
 	for _, raw := range rawCommands {
 		// Peek discriminator for forward-compat. Missing or empty means JSON-RPC.

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -594,7 +595,7 @@ func TestProcessorRecordsEndToEndLatency(t *testing.T) {
 	require.NoError(t, reader.Collect(context.Background(), &rm))
 
 	histogram, ok := findHistogram(rm, metricNameCommandEndToEndLatency)
-	require.True(t, ok, "command_end_to_end_latency_seconds metric not found")
+	require.True(t, ok, "command_end_to_end_latency_milliseconds metric not found")
 	require.Len(t, histogram.DataPoints, 2)
 
 	dpByType := dataPointsByLatencyType(t, histogram.DataPoints)
@@ -618,7 +619,7 @@ func TestProcessorRecordsEndToEndLatency(t *testing.T) {
 
 		status, ok := dp.Attributes.Value(attribute.Key("tunnel_service_status"))
 		require.True(t, ok)
-		require.EqualValues(t, 0, status.AsInt64())
+		require.EqualValues(t, http.StatusOK, status.AsInt64())
 	}
 }
 
@@ -669,7 +670,7 @@ func TestProcessorRecordsNotificationLatency(t *testing.T) {
 	require.NoError(t, reader.Collect(context.Background(), &rm))
 
 	histogram, ok := findHistogram(rm, metricNameCommandEndToEndLatency)
-	require.True(t, ok, "command_end_to_end_latency_seconds metric not found")
+	require.True(t, ok, "command_end_to_end_latency_milliseconds metric not found")
 	require.Len(t, histogram.DataPoints, 2)
 	dpByType := dataPointsByLatencyType(t, histogram.DataPoints)
 
@@ -692,7 +693,7 @@ func TestProcessorRecordsNotificationLatency(t *testing.T) {
 
 		status, ok := dp.Attributes.Value(attribute.Key("tunnel_service_status"))
 		require.True(t, ok)
-		require.EqualValues(t, 0, status.AsInt64())
+		require.EqualValues(t, http.StatusOK, status.AsInt64())
 	}
 }
 
@@ -743,6 +744,821 @@ func TestProcessorConnectFailureDoesNotRecordLatency(t *testing.T) {
 	if histogram, ok := findHistogram(rm, metricNameCommandEndToEndLatency); ok {
 		require.Len(t, histogram.DataPoints, 0, "latency metrics should not record on connect failure")
 	}
+}
+
+func TestProcessorRejectsNonRequestJSONRPCMessage(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+	transport := &stubForwardingTransport{conn: &stubForwardingConnection{}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("non-request-message"),
+		message:    &jsonrpc.Response{}, // not a *jsonrpc.Request
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-non-request",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unexpected command type")
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorRejectsNilCommand(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+	transport := &stubForwardingTransport{conn: &stubForwardingConnection{}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	err = processor.Process(context.Background(), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil command")
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorRejectsUnknownPolledCommandType(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+	transport := &stubForwardingTransport{conn: &stubForwardingConnection{}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &unknownPolledCommand{
+		id:         types.RequestID("unknown-polled-command"),
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-unknown-polled-command",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unexpected command type")
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestNewProcessorValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+	transport := &stubForwardingTransport{conn: &stubForwardingConnection{}}
+	meterProvider := newTestMeterProvider(t)
+
+	validMCP := newTestMCPConfig(t, time.Second)
+	validControlPlane := newTestControlPlaneConfig(t)
+	validOAuthClient := &http.Client{}
+
+	tests := []struct {
+		name   string
+		params processorParams
+	}{
+		{
+			name:   "nil_logger",
+			params: processorParams{Logger: nil, Transport: transport, TunnelResponder: responder, MCPConfig: validMCP, OAuthHTTPClient: validOAuthClient, ControlPlaneCfg: validControlPlane, MeterProvider: meterProvider},
+		},
+		{
+			name:   "nil_transport",
+			params: processorParams{Logger: logger, Transport: nil, TunnelResponder: responder, MCPConfig: validMCP, OAuthHTTPClient: validOAuthClient, ControlPlaneCfg: validControlPlane, MeterProvider: meterProvider},
+		},
+		{
+			name:   "nil_responder",
+			params: processorParams{Logger: logger, Transport: transport, TunnelResponder: nil, MCPConfig: validMCP, OAuthHTTPClient: validOAuthClient, ControlPlaneCfg: validControlPlane, MeterProvider: meterProvider},
+		},
+		{
+			name:   "nil_mcp_config",
+			params: processorParams{Logger: logger, Transport: transport, TunnelResponder: responder, MCPConfig: nil, OAuthHTTPClient: validOAuthClient, ControlPlaneCfg: validControlPlane, MeterProvider: meterProvider},
+		},
+		{
+			name: "non_positive_ttl",
+			params: processorParams{
+				Logger:          logger,
+				Transport:       transport,
+				TunnelResponder: responder,
+				MCPConfig: func() *config.MCPConfig {
+					cfg := *validMCP
+					cfg.ConnectionMaxTTL = 0
+					return &cfg
+				}(),
+				OAuthHTTPClient: validOAuthClient,
+				ControlPlaneCfg: validControlPlane,
+				MeterProvider:   meterProvider,
+			},
+		},
+		{
+			name:   "nil_control_plane_cfg",
+			params: processorParams{Logger: logger, Transport: transport, TunnelResponder: responder, MCPConfig: validMCP, OAuthHTTPClient: validOAuthClient, ControlPlaneCfg: nil, MeterProvider: meterProvider},
+		},
+		{
+			name:   "nil_meter_provider",
+			params: processorParams{Logger: logger, Transport: transport, TunnelResponder: responder, MCPConfig: validMCP, OAuthHTTPClient: validOAuthClient, ControlPlaneCfg: validControlPlane, MeterProvider: nil},
+		},
+		{
+			name:   "nil_oauth_http_client",
+			params: processorParams{Logger: logger, Transport: transport, TunnelResponder: responder, MCPConfig: validMCP, OAuthHTTPClient: nil, ControlPlaneCfg: validControlPlane, MeterProvider: meterProvider},
+		},
+		{
+			name: "missing_oauth_metadata_urls",
+			params: processorParams{
+				Logger:          logger,
+				Transport:       transport,
+				TunnelResponder: responder,
+				MCPConfig: func() *config.MCPConfig {
+					cfg := *validMCP
+					cfg.OAuthResourceMetadataURLs = nil
+					return &cfg
+				}(),
+				OAuthHTTPClient: validOAuthClient,
+				ControlPlaneCfg: validControlPlane,
+				MeterProvider:   meterProvider,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewProcessor(tc.params)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestProcessorReturnsBadGatewayOnWriteErrorWithoutStatusCode(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("no-status")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: 0,
+		writeErr:   errors.New("write failed"),
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("no-status-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-no-status",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	got := responder.waitForResponse(t)
+	require.Equal(t, http.StatusBadGateway, got.response.ResponseCode())
+}
+
+func TestProcessorNotificationAckPostFailureIsReturned(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := &failingResponder{err: errors.New("post failed")}
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{statusCode: http.StatusOK}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	// Notification (no ID) should be acknowledged; this tests the error path when posting that ack fails.
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("notif-ack-post-failure"),
+		message:    &jsonrpc.Request{Method: "notifications/initialized"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-notif-ack",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "post failed")
+}
+
+func TestProcessorForwardResponsesStopsOnEOF(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("eof-before-response")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		// No read steps => io.EOF on first read.
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("eof-before-response-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-eof",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorForwardResponsesStopsOnNilMessage(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("nil-msg")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps: []readStep{
+			{msg: nil, err: nil},
+		},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("nil-msg-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-nil-msg",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorForwardResponsesStopsOnConnectionClosed(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("conn-closed")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps:  []readStep{{err: mcp.ErrConnectionClosed}},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("conn-closed-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-conn-closed",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorForwardResponsesStopsOnEncodeError(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("encode-error")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps: []readStep{
+			// Invalid JSON payload should cause jsonrpc.EncodeMessage to fail.
+			{msg: &jsonrpc.Response{ID: callID, Result: json.RawMessage(`not-json`)}, err: nil},
+		},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("encode-error-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-encode-error",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorForwardResponsesStopsOnReadError(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("read-error")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps:  []readStep{{err: errors.New("read failed")}},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("read-error-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-read-error",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorForwardResponsesPostFailureStopsForwarding(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := &countingResponder{err: errors.New("post failed")}
+
+	callID, err := jsonrpc.MakeID("post-failure-forward")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps: []readStep{
+			{msg: &jsonrpc.Response{ID: callID, Result: json.RawMessage(`{"ok":true}`)}, err: nil},
+		},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("post-failure-forward-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-post-failure-forward",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+	require.EqualValues(t, 1, responder.calls.Load())
+}
+
+func TestBuildJSONRPCErrorResponseAndRequestKindAttributes(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildJSONRPCErrorResponse(nil, http.StatusBadRequest, errors.New("boom"))
+	require.Error(t, err)
+
+	id, err := jsonrpc.MakeID("req-1")
+	require.NoError(t, err)
+	req := &jsonrpc.Request{ID: id, Method: "ping"}
+
+	payload, err := buildJSONRPCErrorResponse(req, 999, errors.New("boom"))
+	require.NoError(t, err)
+	require.NotEmpty(t, payload)
+
+	callAttrs := requestKindAttributes(req)
+	require.NotEmpty(t, callAttrs)
+
+	notifAttrs := requestKindAttributes(&jsonrpc.Request{Method: "notifications/initialized"})
+	require.NotEmpty(t, notifAttrs)
+	require.Nil(t, requestKindAttributes(nil))
+}
+
+func TestProcessorForwardResponsesIgnoresUpstreamNotificationRequests(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("ignore-upstream-notif")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps: []readStep{
+			// Notification from the MCP server (no ID) should be ignored.
+			{msg: &jsonrpc.Request{Method: "notifications/progress"}, err: nil},
+			{msg: &jsonrpc.Response{ID: callID, Result: json.RawMessage(`{"ok":true}`)}, err: nil},
+		},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("ignore-upstream-notif-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-ignore-upstream-notif",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+	got := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, got.requestID)
+}
+
+func TestProcessorForwardResponsesStopsOnNonResponseMessage(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("non-response")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps: []readStep{
+			// A request with an ID is not a notification; forwardResponses should treat it as an error.
+			{msg: &jsonrpc.Request{ID: callID, Method: "unexpected"}, err: nil},
+		},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("non-response-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-non-response",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorForwardResponsesStopsOnIDMismatch(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("id-mismatch-call")
+	require.NoError(t, err)
+	otherID, err := jsonrpc.MakeID("id-mismatch-other")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps: []readStep{
+			{msg: &jsonrpc.Response{ID: otherID, Result: json.RawMessage(`{"ok":true}`)}, err: nil},
+		},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("id-mismatch-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-id-mismatch",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorForwardResponsesStopsWhenConnectionTTLReached(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	callID, err := jsonrpc.MakeID("ttl-reached")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusOK,
+		readSteps: []readStep{
+			{blockUntilDone: true},
+		},
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, 15*time.Millisecond),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("ttl-reached-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-ttl",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	select {
+	case resp := <-responder.responses:
+		t.Fatalf("unexpected response posted: %+v", resp)
+	default:
+	}
+}
+
+func TestProcessorErrorResponsePostFailureIsReturned(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := &failingResponder{err: errors.New("post failed")}
+
+	callID, err := jsonrpc.MakeID("post-error")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{conn: &scriptedForwardingConnection{
+		statusCode: http.StatusUnauthorized,
+		writeErr:   errors.New("unauthorized"),
+	}}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("post-error-request"),
+		message:    &jsonrpc.Request{ID: callID, Method: "initialize"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-post-error",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "post failed")
+}
+
+func TestProcessorOAuthDiscoveryPostFailureIsReturned(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"resource":"https://example.com","scopes_supported":["read"]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	cfg := &config.MCPConfig{
+		ServerURL:             serverURL,
+		ConnectionMaxTTL:      time.Second,
+		MaxConcurrentRequests: 1,
+	}
+	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := &failingResponder{err: context.Canceled}
+	transport := &stubForwardingTransport{conn: &stubForwardingConnection{}}
+	meterProvider := newTestMeterProvider(t)
+
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       cfg,
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakeOauthDiscoveryCommand{
+		id:         types.RequestID("oauth-post-error"),
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		headers:    http.Header{},
+		shardToken: "shard-oauth-post-error",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestProcessorRequiresShardToken(t *testing.T) {
@@ -828,6 +1644,103 @@ func TestProcessorHandlesOAuthDiscoveryCommand(t *testing.T) {
 	require.Equal(t, http.StatusOK, got.response.ResponseCode())
 	require.NotEmpty(t, got.response.Payload())
 	require.Equal(t, "application/json", got.response.Headers().Get("Content-Type"))
+}
+
+func TestProcessorNormalizesZeroStatusCodeForJSONRPCResponses(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+
+	id, err := jsonrpc.MakeID("req-0-status")
+	require.NoError(t, err)
+
+	req := &jsonrpc.Request{
+		ID:     id,
+		Method: "ping",
+	}
+
+	conn := &stubForwardingConnection{
+		statusCode:      0,
+		responseHeaders: http.Header{"Content-Type": {"application/json"}},
+		response:        &jsonrpc.Response{ID: id, Result: json.RawMessage(`{}`)},
+	}
+	transport := &stubForwardingTransport{conn: conn}
+	meterProvider := newTestMeterProvider(t)
+
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("status-0-ok"),
+		message:    req,
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		headers:    http.Header{},
+		shardToken: "shard-status-0-ok",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.NoError(t, err)
+
+	got := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, got.requestID)
+	require.Equal(t, http.StatusOK, got.response.ResponseCode())
+}
+
+func TestProcessorNormalizesZeroStatusCodeForNotificationAck(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+
+	// A JSON-RPC notification has no ID.
+	req := &jsonrpc.Request{
+		Method: "notify",
+	}
+
+	conn := &stubForwardingConnection{
+		statusCode:      0,
+		responseHeaders: http.Header{"X-Test": {"ok"}},
+	}
+	transport := &stubForwardingTransport{conn: conn}
+	meterProvider := newTestMeterProvider(t)
+
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("status-0-ack"),
+		message:    req,
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		headers:    http.Header{},
+		shardToken: "shard-status-0-ack",
+	}
+
+	err = processor.Process(context.Background(), cmd)
+	require.NoError(t, err)
+
+	got := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, got.requestID)
+	require.Equal(t, types.ResponseTypeNotificationAcknowledgment, got.response.Type())
+	require.Equal(t, http.StatusOK, got.response.ResponseCode())
 }
 
 type recordingResponder struct {
@@ -976,6 +1889,45 @@ func (c *stubForwardingConnection) Read(context.Context) (jsonrpc.Message, error
 
 func (c *stubForwardingConnection) Close() error { return nil }
 
+type readStep struct {
+	msg            jsonrpc.Message
+	err            error
+	blockUntilDone bool
+}
+
+type scriptedForwardingConnection struct {
+	statusCode int
+	headers    http.Header
+	writeErr   error
+
+	mu        sync.Mutex
+	readSteps []readStep
+}
+
+func (c *scriptedForwardingConnection) Write(context.Context, http.Header, jsonrpc.Message) (int, http.Header, error) {
+	return c.statusCode, c.headers, c.writeErr
+}
+
+func (c *scriptedForwardingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(c.readSteps) == 0 {
+		return nil, io.EOF
+	}
+	step := c.readSteps[0]
+	c.readSteps = c.readSteps[1:]
+
+	if step.blockUntilDone {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	return step.msg, step.err
+}
+
+func (c *scriptedForwardingConnection) Close() error { return nil }
+
 type fakePolledCommand struct {
 	id         types.RequestID
 	message    jsonrpc.Message
@@ -1031,3 +1983,43 @@ func (f *fakeOauthDiscoveryCommand) PolledAt() time.Time        { return f.polle
 func (f *fakeOauthDiscoveryCommand) Headers() http.Header       { return f.headers }
 func (f *fakeOauthDiscoveryCommand) ShardToken() string         { return f.shardToken }
 func (f *fakeOauthDiscoveryCommand) SessionID() (string, bool)  { return "", false }
+func (f *fakeOauthDiscoveryCommand) IsOAuthDiscovery() bool     { return true }
+
+type unknownPolledCommand struct {
+	id         types.RequestID
+	enqueuedAt time.Time
+	polledAt   time.Time
+	headers    http.Header
+	sessionID  *string
+	shardToken string
+}
+
+func (f *unknownPolledCommand) RequestID() types.RequestID { return f.id }
+func (f *unknownPolledCommand) EnqueuedAt() time.Time      { return f.enqueuedAt }
+func (f *unknownPolledCommand) PolledAt() time.Time        { return f.polledAt }
+func (f *unknownPolledCommand) Headers() http.Header       { return f.headers }
+func (f *unknownPolledCommand) ShardToken() string         { return f.shardToken }
+func (f *unknownPolledCommand) SessionID() (string, bool) {
+	if f.sessionID == nil {
+		return "", false
+	}
+	return *f.sessionID, true
+}
+
+type failingResponder struct {
+	err error
+}
+
+func (r *failingResponder) PostResponse(context.Context, types.RequestID, *types.TunnelResponse) (types.TunnelServiceRequestID, error) {
+	return "", r.err
+}
+
+type countingResponder struct {
+	err   error
+	calls atomic.Int32
+}
+
+func (r *countingResponder) PostResponse(context.Context, types.RequestID, *types.TunnelResponse) (types.TunnelServiceRequestID, error) {
+	r.calls.Add(1)
+	return "", r.err
+}

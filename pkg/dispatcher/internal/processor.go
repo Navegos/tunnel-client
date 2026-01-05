@@ -110,6 +110,10 @@ func NewProcessor(p processorParams) (Processor, error) {
 
 // Process delivers the command to the MCP server and logs the response.
 func (p *mcpProcessor) Process(ctx context.Context, cmd controlplane.PolledCommand) error {
+	if cmd == nil {
+		return fmt.Errorf("dispatcher processor: nil command")
+	}
+
 	requestID := cmd.RequestID()
 	ctx = tunnelctx.ContextWithRequestID(ctx, requestID.String())
 	if controlPlaneRequestID, ok := types.NewControlPlaneRequestIDFromHeader(cmd.Headers()); ok {
@@ -166,11 +170,9 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 	//TODO(denyska): upon receiving SessionTermination command, issue conn.Close() that will do DELETE
 
 	statusCode, respHeader, err := conn.Write(ctx, cmd.Headers(), req)
+	statusCode = normalizeTransportStatusCode(statusCode, err)
 	if err != nil || statusCode >= http.StatusBadRequest {
 		status := statusCode
-		if status == 0 {
-			status = http.StatusBadGateway
-		}
 		encodedError, encodeErr := buildJSONRPCErrorResponse(req, status, err)
 		if encodeErr != nil {
 			logger.ErrorContext(ctx, "failed to encode MCP error response", slog.String("error", encodeErr.Error()))
@@ -300,7 +302,9 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 			return
 		}
 		if msg == nil {
-			continue
+			// Defensive: a nil message without an error would otherwise spin forever.
+			logger.ErrorContext(ctx, "received nil message from MCP server without error")
+			return
 		}
 
 		// TODO(denyska): Implement relaying of notifications back to the tunnel-service for long-running requests.
@@ -442,6 +446,16 @@ func buildJSONRPCErrorResponse(req *jsonrpc.Request, statusCode int, cause error
 		},
 	}
 	return jsonrpc.EncodeMessage(resp)
+}
+
+func normalizeTransportStatusCode(statusCode int, err error) int {
+	if statusCode != 0 {
+		return statusCode
+	}
+	if err != nil {
+		return http.StatusBadGateway
+	}
+	return http.StatusOK
 }
 
 func requestKindAttributes(req *jsonrpc.Request) []attribute.KeyValue {
