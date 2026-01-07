@@ -14,7 +14,6 @@ import (
 )
 
 func TestHarnessHandlesOAuthDiscoveryCommand(t *testing.T) {
-	t.Parallel()
 
 	const requestID = "cmd-oauth"
 

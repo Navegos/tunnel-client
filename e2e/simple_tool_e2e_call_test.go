@@ -16,14 +16,10 @@ import (
 )
 
 func TestHarnessExecuteScenariousWithInitializationAndTool(t *testing.T) {
-	t.Parallel()
-
 	runSimpleToolScenario(t)
 }
 
 func TestHarnessHandlesKeepalivePingEvents(t *testing.T) {
-	t.Parallel()
-
 	runSimpleToolScenarioWithHarnessOptions(
 		t,
 		[]harnesspkg.HarnessOption{
