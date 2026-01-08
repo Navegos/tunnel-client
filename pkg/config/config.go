@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -127,21 +128,40 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (*Config, error)
 	fs := pflag.NewFlagSet("tunnel-client", pflag.ContinueOnError)
 	RegisterFlags(fs)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(fs.Output(), "%s version %s", fs.Name(), version.Version)
-		if version.GitSHA != "" {
-			_, _ = fmt.Fprintf(fs.Output(), " (git sha: %s)", version.GitSHA)
-		}
-		_, _ = fmt.Fprintln(fs.Output())
-		_, _ = fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
-		fs.PrintDefaults()
-		_, _ = fmt.Fprintln(fs.Output(), "\nEnvironment variables:")
-		_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_API_KEY\tAPI key used to authenticate to the tunnel control plane (required; preferred)")
-		_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
+		WriteUsage(fs, fs.Output())
 	}
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 	return LoadFromFlagSet(fs, lookupEnv)
+}
+
+// WriteUsage prints the tunnel-client CLI usage text for the provided flag set.
+func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
+	if fs == nil {
+		return
+	}
+	if w == nil {
+		w = fs.Output()
+	}
+	previousOutput := fs.Output()
+	fs.SetOutput(w)
+	defer fs.SetOutput(previousOutput)
+
+	name := fs.Name()
+	if name == "" {
+		name = "tunnel-client"
+	}
+	_, _ = fmt.Fprintf(fs.Output(), "%s version %s", name, version.Version)
+	if version.GitSHA != "" {
+		_, _ = fmt.Fprintf(fs.Output(), " (git sha: %s)", version.GitSHA)
+	}
+	_, _ = fmt.Fprintln(fs.Output())
+	_, _ = fmt.Fprintf(fs.Output(), "Usage of %s:\n", name)
+	fs.PrintDefaults()
+	_, _ = fmt.Fprintln(fs.Output(), "\nEnvironment variables:")
+	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_API_KEY\tAPI key used to authenticate to the tunnel control plane (required; preferred)")
+	_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
 }
 
 // RegisterFlags attaches all supported CLI flags to the provided flag set.

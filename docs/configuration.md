@@ -5,6 +5,11 @@
 - **Precedence**: flags > environment variables > defaults.
 - **Requirement**: you must provide a control-plane API key, a tunnel ID, and an MCP server URL.
 
+## Commands
+
+- `run` (default): start the tunnel client poll loop.
+- `tunnel-client` and `tunnel-client run` are equivalent.
+
 ## Control plane
 
 - **Base URL**

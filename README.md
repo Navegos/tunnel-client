@@ -20,5 +20,10 @@ The tunnel client is an enterprise-hosted agent that connects your internal MCP 
 - It forwards the received JSON-RPC requests to your configured MCP server over HTTP(S).
 - It exposes an **admin/health server** (`/healthz`, `/readyz`, `/metrics`) for probes and Prometheus scraping.
 
+## CLI
+
+- `tunnel-client` defaults to the `run` command.
+- `tunnel-client run` is equivalent and provided for future subcommands.
+
 ## License
 This project is licensed under the [Apache License 2.0](LICENSE).
