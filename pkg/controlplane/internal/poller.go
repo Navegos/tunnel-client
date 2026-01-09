@@ -137,12 +137,14 @@ func (p *poller) Run(ctx context.Context) {
 			p.hadPollError = true
 			p.metrics.pollErrors.Add(ctx, 1, metric.WithAttributes(attribute.String(attributeKeyErrorKind, pollErrorKind(err))))
 			delay := p.backoff.Duration()
+			requestIDValue := tunnelServiceRequestID.String()
+			if requestIDValue == "" {
+				requestIDValue = "missing_request_id"
+			}
 			attrs := []any{
 				slog.String("error", err.Error()),
 				slog.Int64("retry_in_ms", delay.Milliseconds()),
-			}
-			if tunnelServiceRequestID != "" {
-				attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tunnelServiceRequestID.String()))
+				slog.String(tclog.FieldTunnelServiceRequestID, requestIDValue),
 			}
 			if errors.Is(err, context.DeadlineExceeded) {
 				attrs = append(attrs, slog.Int64("poll_timeout_ms", p.pollTimeout.Milliseconds()))
