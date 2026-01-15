@@ -91,8 +91,12 @@ func NewProcessor(p processorParams) (Processor, error) {
 		return nil, fmt.Errorf("dispatcher processor: %w", err)
 	}
 
+	transportKind := p.MCPConfig.TransportKind
+	if transportKind == "" {
+		transportKind = config.MCPTransportHTTPStreamable
+	}
 	metadataURLs := p.MCPConfig.OAuthResourceMetadataURLs
-	if len(metadataURLs) == 0 {
+	if len(metadataURLs) == 0 && transportKind == config.MCPTransportHTTPStreamable {
 		return nil, fmt.Errorf("dispatcher processor: missing OAuth resource metadata URLs")
 	}
 

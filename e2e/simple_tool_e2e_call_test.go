@@ -19,6 +19,19 @@ func TestHarnessExecuteScenariousWithInitializationAndTool(t *testing.T) {
 	runSimpleToolScenario(t)
 }
 
+func TestHarnessExecuteScenarioWithInMemoryTransport(t *testing.T) {
+	runSimpleToolScenarioWithHarnessOptions(
+		t,
+		[]harnesspkg.HarnessOption{
+			harnesspkg.WithInMemoryMCPTransport(),
+		},
+		[]mocktunnelservice.Option{
+			mocktunnelservice.WithInitializationPhaseCommandsWithoutSessionHeaders(),
+		},
+		mockmcpserver.WithToolListChangedNotificationsDisabled(),
+	)
+}
+
 func TestHarnessHandlesKeepalivePingEvents(t *testing.T) {
 	runSimpleToolScenarioWithHarnessOptions(
 		t,
@@ -31,17 +44,19 @@ func TestHarnessHandlesKeepalivePingEvents(t *testing.T) {
 				cfg.ControlPlane.PollTimeout = time.Second
 			}),
 		},
+		nil,
 		mockmcpserver.WithKeepalivePings(),
 	)
 }
 
 func runSimpleToolScenario(t *testing.T, mcpOptions ...mockmcpserver.Option) {
-	runSimpleToolScenarioWithHarnessOptions(t, nil, mcpOptions...)
+	runSimpleToolScenarioWithHarnessOptions(t, nil, nil, mcpOptions...)
 }
 
 func runSimpleToolScenarioWithHarnessOptions(
 	t *testing.T,
 	harnessOptions []harnesspkg.HarnessOption,
+	controlPlaneOptions []mocktunnelservice.Option,
 	mcpOptions ...mockmcpserver.Option,
 ) {
 	t.Helper()
@@ -112,13 +127,19 @@ func runSimpleToolScenarioWithHarnessOptions(
 		harnesspkg.WithClientConfig(func(cfg *config.Config) {
 			cfg.Logging.Level = slog.LevelDebug
 		}),
-		harnesspkg.WithControlPlaneOptions(
+	}
+	controlPlaneOpts := controlPlaneOptions
+	if controlPlaneOpts == nil {
+		controlPlaneOpts = []mocktunnelservice.Option{
 			mocktunnelservice.WithSessionHeaderPropagation(),
 			mocktunnelservice.WithInitializationPhaseCommands(),
-			mocktunnelservice.WithCommandResponses(toolCommand),
-		),
-		harnesspkg.WithMCPOptions(mcpOpts...),
+		}
 	}
+	controlPlaneOpts = append(controlPlaneOpts, mocktunnelservice.WithCommandResponses(toolCommand))
+	options = append(options,
+		harnesspkg.WithControlPlaneOptions(controlPlaneOpts...),
+		harnesspkg.WithMCPOptions(mcpOpts...),
+	)
 	if len(harnessOptions) > 0 {
 		options = append(options, harnessOptions...)
 	}

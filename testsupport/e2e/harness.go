@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/fx/fxtest"
@@ -27,6 +28,7 @@ type harnessConfig struct {
 	clientCustomizer    func(*config.Config)
 	scenarioTimeout     time.Duration
 	logWriter           io.Writer
+	mcpTransportKind    config.MCPTransportKind
 }
 
 // HarnessOption customizes the E2E harness configuration.
@@ -84,6 +86,13 @@ func WithLogWriter(w io.Writer) HarnessOption {
 	}
 }
 
+// WithInMemoryMCPTransport uses the in-memory MCP transport for this harness.
+func WithInMemoryMCPTransport() HarnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.mcpTransportKind = config.MCPTransportInMemory
+	}
+}
+
 // Harness wires together the mock control plane, mock MCP server, and a running tunnel-client.
 type Harness struct {
 	ControlPlane  *mocktunnelservice.MockTunnelService
@@ -93,6 +102,8 @@ type Harness struct {
 	waitTimeout   time.Duration
 	tunnelStarted bool
 	mcpStarted    bool
+	inMemoryMCP   *mcp.InMemoryTransport
+	stdioMCP      *mcp.IOTransport
 	logWriter     io.Writer
 	logBuffer     *bytes.Buffer
 }
@@ -102,9 +113,10 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 	t.Helper()
 
 	cfg := harnessConfig{
-		apiKey:          "test-api-key",
-		tunnelID:        types.TunnelID("tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-		scenarioTimeout: 4 * time.Second,
+		apiKey:           "test-api-key",
+		tunnelID:         types.TunnelID("tunnel_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		scenarioTimeout:  4 * time.Second,
+		mcpTransportKind: config.MCPTransportHTTPStreamable,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -138,6 +150,7 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 		},
 		MCP: config.MCPConfig{
 			ServerURL:             nil,
+			TransportKind:         cfg.mcpTransportKind,
 			ConnectionMaxTTL:      time.Minute,
 			MaxConcurrentRequests: 1,
 		},
@@ -228,9 +241,16 @@ func (h *Harness) startMCPServer(t testing.TB) {
 	if h.mcpStarted {
 		return
 	}
-	h.MCP.Start(t)
-	if h.MCP.BaseURL() == nil {
-		t.Fatalf("mock MCP server failed to expose a base URL")
+	switch h.cfg.MCP.TransportKind {
+	case config.MCPTransportInMemory:
+		h.inMemoryMCP = h.MCP.StartInMemory(t)
+	case config.MCPTransportStdio:
+		h.stdioMCP = h.MCP.StartStdio(t)
+	default:
+		h.MCP.Start(t)
+		if h.MCP.BaseURL() == nil {
+			t.Fatalf("mock MCP server failed to expose a base URL")
+		}
 	}
 	h.mcpStarted = true
 }
@@ -251,25 +271,50 @@ func (h *Harness) startClient(t testing.TB) {
 		t.Fatalf("control plane must be started before the client")
 		return
 	}
-	mcpURL := h.MCP.BaseURL()
-	if mcpURL == nil {
-		t.Fatalf("mock MCP server must be started before the client")
-		return
-	}
 	cfg.ControlPlane.BaseURL = ctrlURL
-	cfg.MCP.ServerURL = mcpURL
-	if err := cfg.MCP.BootstrapOAuthResourceMetadataURLs(); err != nil {
-		t.Fatalf("bootstrap MCP OAuth metadata URLs: %v", err)
+	transportKind := cfg.MCP.TransportKind
+	if transportKind == "" {
+		transportKind = config.MCPTransportHTTPStreamable
+	}
+	switch transportKind {
+	case config.MCPTransportHTTPStreamable:
+		mcpURL := h.MCP.BaseURL()
+		if mcpURL == nil {
+			t.Fatalf("mock MCP server must be started before the client")
+			return
+		}
+		cfg.MCP.ServerURL = mcpURL
+		if err := cfg.MCP.BootstrapOAuthResourceMetadataURLs(); err != nil {
+			t.Fatalf("bootstrap MCP OAuth metadata URLs: %v", err)
+		}
+	case config.MCPTransportInMemory, config.MCPTransportStdio:
+		if transportKind == config.MCPTransportInMemory && h.inMemoryMCP == nil {
+			t.Fatalf("mock MCP in-memory transport must be started before the client")
+			return
+		}
+		if transportKind == config.MCPTransportStdio && h.stdioMCP == nil {
+			t.Fatalf("mock MCP stdio transport must be started before the client")
+			return
+		}
+	default:
+		t.Fatalf("unsupported MCP transport kind: %s", transportKind)
+		return
 	}
 	logWriter := h.logWriter
 	if logWriter == nil {
 		logWriter = io.Discard
 	}
-	app := fxtest.New(t, app.Options(
-		cfg,
+	options := []fx.Option{
 		fx.Provide(func() io.Writer { return logWriter }),
 		fx.WithLogger(func(*slog.Logger) fxevent.Logger { return fxevent.NopLogger }),
-	)...)
+	}
+	if h.inMemoryMCP != nil {
+		options = append(options, fx.Supply(h.inMemoryMCP))
+	}
+	if h.stdioMCP != nil {
+		options = append(options, fx.Supply(h.stdioMCP))
+	}
+	app := fxtest.New(t, app.Options(cfg, options...)...)
 	app.RequireStart()
 	h.app = app
 }

@@ -97,6 +97,17 @@ func WithOAuthProtection() Option {
 	}
 }
 
+// WithToolListChangedNotificationsDisabled disables tool list changed notifications.
+func WithToolListChangedNotificationsDisabled() Option {
+	return func(m *MockMCPServer) {
+		m.serverOptions = &mcp.ServerOptions{
+			Capabilities: &mcp.ServerCapabilities{
+				Tools: &mcp.ToolCapabilities{ListChanged: false},
+			},
+		}
+	}
+}
+
 type MockMCPServer struct {
 	mu       sync.Mutex
 	calls    []*Call
@@ -118,6 +129,7 @@ type MockMCPServer struct {
 	injectKeepalivePings bool
 
 	oauthMetadata *oauthex.ProtectedResourceMetadata
+	serverOptions *mcp.ServerOptions
 
 	tb atomic.Value // testing.TB
 }
@@ -372,7 +384,7 @@ func (m *MockMCPServer) uniqueToolsLocked() []string {
 }
 
 func (m *MockMCPServer) newServerLocked() *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "mock-mcp-server", Version: "1.0.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "mock-mcp-server", Version: "1.0.0"}, m.serverOptions)
 	tools := m.uniqueToolsLocked()
 	for _, toolName := range tools {
 		tool := &mcp.Tool{

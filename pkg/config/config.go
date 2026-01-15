@@ -28,6 +28,15 @@ const (
 	LogFormatJSON
 )
 
+// MCPTransportKind describes the available MCP transport types.
+type MCPTransportKind string
+
+const (
+	MCPTransportHTTPStreamable MCPTransportKind = "http-streamable"
+	MCPTransportStdio          MCPTransportKind = "stdio"
+	MCPTransportInMemory       MCPTransportKind = "in-memory"
+)
+
 const (
 	defaultControlPlaneBaseURL                    = "https://api.openai.com"
 	defaultControlPlaneMaxInFlight                = 20
@@ -111,6 +120,7 @@ type ProcessConfig struct {
 // MCPConfig captures configuration for the Model Control Plane integration.
 type MCPConfig struct {
 	ServerURL             *url.URL
+	TransportKind         MCPTransportKind
 	ConnectionMaxTTL      time.Duration
 	MaxConcurrentRequests int
 	// OAuthResourceMetadataURLs lists candidate OAuth protected resource metadata
@@ -701,6 +711,7 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (M
 
 	return MCPConfig{
 		ServerURL:                 serverURL,
+		TransportKind:             MCPTransportHTTPStreamable,
 		ConnectionMaxTTL:          ttl,
 		MaxConcurrentRequests:     maxConcurrent,
 		OAuthResourceMetadataURLs: buildResourceMetadataURLs(serverURL),

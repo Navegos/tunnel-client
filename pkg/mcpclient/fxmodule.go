@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,17 +22,23 @@ import (
 
 var Module = fx.Module(
 	"mcpclient",
-	fx.Provide(newMcpClient),
+	fx.Provide(
+		newMcpClient,
+		fx.Annotate(newStreamableTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
+		fx.Annotate(newInMemoryTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
+		fx.Annotate(newStdioTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
+	),
 	fx.Invoke(probeMcpServer),
 )
 
 type clientParams struct {
 	fx.In
 
-	Config        *config.MCPConfig
-	Logging       *config.LoggingConfig
-	Logger        *slog.Logger
-	MeterProvider *sdkmetric.MeterProvider
+	Config             *config.MCPConfig
+	Logging            *config.LoggingConfig
+	Logger             *slog.Logger
+	MeterProvider      *sdkmetric.MeterProvider
+	TransportProviders []TransportProvider `group:"mcp_transport_providers"`
 }
 
 type clientOutputs struct {
@@ -54,8 +61,8 @@ type runnerParams struct {
 }
 
 func newMcpClient(p clientParams) (clientOutputs, error) {
-	if p.Config == nil || p.Config.ServerURL == nil {
-		return clientOutputs{}, fmt.Errorf("mcpclient: server URL is required")
+	if p.Config == nil {
+		return clientOutputs{}, fmt.Errorf("mcpclient: mcp config is required")
 	}
 	if p.Logger == nil || p.Logging == nil || p.MeterProvider == nil {
 		return clientOutputs{}, fmt.Errorf("mcpclient: logger, logging config, and meter provider are required")
@@ -64,9 +71,20 @@ func newMcpClient(p clientParams) (clientOutputs, error) {
 	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "tunnel-client", Version: version.Version}, nil)
 
 	httpClient := &http.Client{Transport: buildMcpHTTPTransport(p.Logger, p.Logging, p.MeterProvider)}
-	var mcpTransport mcp.Transport = &mcp.StreamableClientTransport{
-		Endpoint:   p.Config.ServerURL.String(),
+	transportKind := config.MCPTransportHTTPStreamable
+	if p.Config != nil && p.Config.TransportKind != "" {
+		transportKind = p.Config.TransportKind
+	}
+	provider, err := selectTransportProvider(transportKind, p.TransportProviders)
+	if err != nil {
+		return clientOutputs{}, err
+	}
+	mcpTransport, err := provider.Build(TransportBuildParams{
+		Config:     p.Config,
 		HTTPClient: httpClient,
+	})
+	if err != nil {
+		return clientOutputs{}, err
 	}
 
 	if p.Logging.HTTPRawUnsafe && p.Logging.Level <= slog.LevelDebug {
@@ -87,8 +105,21 @@ func newMcpClient(p clientParams) (clientOutputs, error) {
 
 // probeMcpServer performs a one-time discovery handshake to confirm connectivity and record server metadata.
 func probeMcpServer(p runnerParams) error {
-	if p.Config == nil || p.Config.ServerURL == nil {
-		return fmt.Errorf("mcpclient: server URL is required")
+	if p.Config == nil {
+		return fmt.Errorf("mcpclient: mcp config is required")
+	}
+	transportKind := config.MCPTransportHTTPStreamable
+	if p.Config.TransportKind != "" {
+		transportKind = p.Config.TransportKind
+	}
+	if transportKind != config.MCPTransportHTTPStreamable {
+		if p.Logger != nil {
+			p.Logger.Info("Skipping MCP probe for transport", slog.String("transport", string(transportKind)))
+		}
+		return nil
+	}
+	if transportKind == config.MCPTransportHTTPStreamable && p.Config.ServerURL == nil {
+		return fmt.Errorf("mcpclient: server URL is required for %s transport", transportKind)
 	}
 
 	logger := p.Logger.With(tclog.FieldComponent, tclog.ComponentMcpClient)
@@ -97,7 +128,10 @@ func probeMcpServer(p runnerParams) error {
 
 	p.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
-			logger.InfoContext(ctx, "Probing MCP server:", slog.String("url", p.Config.ServerURL.String()))
+			logger.InfoContext(ctx, "Probing MCP server",
+				slog.String("transport", string(transportKind)),
+				slog.String("target", transportTargetLabel(transportKind, p.Config.ServerURL)),
+			)
 			go func() {
 				defer close(done)
 				sess, err := p.Client.Connect(ctx, p.Transport, nil)
@@ -164,4 +198,14 @@ func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig
 	)
 	base = tclog.NewRoundTripper(base, forwardingLogger, loggingCfg, tclog.ComponentMcpClient)
 	return internal.NewForwardingRoundTripper(base)
+}
+
+func transportTargetLabel(kind config.MCPTransportKind, serverURL *url.URL) string {
+	if kind == config.MCPTransportHTTPStreamable && serverURL != nil {
+		return serverURL.String()
+	}
+	if kind == "" {
+		return string(config.MCPTransportHTTPStreamable)
+	}
+	return string(kind)
 }

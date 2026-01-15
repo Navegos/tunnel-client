@@ -25,6 +25,9 @@ func TestNewMcpClient_DefaultTransport(t *testing.T) {
 		},
 		Logger:        slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
 		MeterProvider: sdkmetric.NewMeterProvider(),
+		TransportProviders: []TransportProvider{
+			newStreamableTransportProvider(),
+		},
 	}
 	require.NoError(t, params.Config.BootstrapOAuthResourceMetadataURLs())
 
@@ -60,6 +63,9 @@ func TestNewMcpClient_LoggingTransport(t *testing.T) {
 		},
 		Logger:        logger,
 		MeterProvider: sdkmetric.NewMeterProvider(),
+		TransportProviders: []TransportProvider{
+			newStreamableTransportProvider(),
+		},
 	}
 	require.NoError(t, params.Config.BootstrapOAuthResourceMetadataURLs())
 
@@ -118,6 +124,9 @@ func TestNewMcpClient_LoggingTransportRequiresDebugLevel(t *testing.T) {
 		},
 		Logger:        slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
 		MeterProvider: sdkmetric.NewMeterProvider(),
+		TransportProviders: []TransportProvider{
+			newStreamableTransportProvider(),
+		},
 	}
 	require.NoError(t, params.Config.BootstrapOAuthResourceMetadataURLs())
 

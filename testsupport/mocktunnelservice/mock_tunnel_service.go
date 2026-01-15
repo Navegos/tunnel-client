@@ -239,7 +239,35 @@ func WithInitializationPhaseCommands() Option {
 		if mock == nil {
 			return
 		}
-		commands := mock.initializationPhaseCommandResponses()
+		commands := mock.initializationPhaseCommandResponses(true)
+		if len(commands) == 0 {
+			return
+		}
+		count := len(commands)
+		mock.appendCommandResponses(commands...)
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		total := len(mock.script)
+		if total < count {
+			return
+		}
+		start := total - count
+		reordered := make([]*scriptedCommand, 0, total)
+		reordered = append(reordered, mock.script[start:]...)
+		reordered = append(reordered, mock.script[:start]...)
+		mock.script = reordered
+	}
+}
+
+// WithInitializationPhaseCommandsWithoutSessionHeaders pre-populates the mock with the standard MCP
+// initialization handshake commands (initialize + notifications/initialized) but skips asserting
+// session header propagation in the initialize response.
+func WithInitializationPhaseCommandsWithoutSessionHeaders() Option {
+	return func(mock *MockTunnelService) {
+		if mock == nil {
+			return
+		}
+		commands := mock.initializationPhaseCommandResponses(false)
 		if len(commands) == 0 {
 			return
 		}
@@ -703,8 +731,12 @@ func (m *MockTunnelService) writeCommandEnvelope(w http.ResponseWriter, commands
 	}
 }
 
-func (m *MockTunnelService) initializationPhaseCommandResponses() []CommandResponse {
+func (m *MockTunnelService) initializationPhaseCommandResponses(requireSessionHeader bool) []CommandResponse {
 	sessionCapture := m.defaultSessionPostProcessor()
+	assertion := assertInitializationResponse
+	if !requireSessionHeader {
+		assertion = assertInitializationResponseWithoutSessionHeader
+	}
 	initialize := CommandResponse{
 		Command: NewCommand(
 			initializationCommandRequestID,
@@ -713,7 +745,7 @@ func (m *MockTunnelService) initializationPhaseCommandResponses() []CommandRespo
 		),
 		ExpectedResponses: []ExpectedResponse{{
 			RequestID:   initializationCommandRequestID,
-			Assert:      assertInitializationResponse,
+			Assert:      assertion,
 			PostProcess: func(resp ReceivedResponse, storage SharedStorage) { sessionCapture(resp, storage) },
 		}},
 	}
@@ -790,6 +822,48 @@ func assertInitializationResponse(tb testing.TB, resp ReceivedResponse) {
 	}
 	if resp.ResponseHeaders.Get(sessionHeaderKey) == "" {
 		failAssertion(tb, "initialize response missing %s header", sessionHeaderKey)
+	}
+	var envelope struct {
+		JSONRPC string `json:"jsonrpc"`
+		Result  struct {
+			ProtocolVersion string `json:"protocolVersion"`
+			ServerInfo      struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(resp.JSONResponse, &envelope); err != nil {
+		failAssertion(tb, "initialize response invalid JSON-RPC: %v", err)
+		return
+	}
+	if envelope.JSONRPC != "2.0" {
+		failAssertion(tb, "initialize response jsonrpc was %q", envelope.JSONRPC)
+	}
+	if len(envelope.Error) != 0 {
+		failAssertion(tb, "initialize response contained error payload: %s", string(envelope.Error))
+	}
+	if envelope.Result.ProtocolVersion == "" {
+		failAssertion(tb, "initialize result missing protocolVersion")
+	}
+	if envelope.Result.ServerInfo.Name == "" || envelope.Result.ServerInfo.Version == "" {
+		failAssertion(tb, "initialize result missing serverInfo fields: %+v", envelope.Result.ServerInfo)
+	}
+}
+
+func assertInitializationResponseWithoutSessionHeader(tb testing.TB, resp ReceivedResponse) {
+	if tb != nil {
+		tb.Helper()
+	}
+	if resp.ResponseType != string(wiretypes.ResponsePayloadJSONRPC) {
+		failAssertion(tb, "initialize response must be JSON-RPC, got %q", resp.ResponseType)
+	}
+	if resp.ResponseCode < 200 || resp.ResponseCode >= 300 {
+		failAssertion(tb, "initialize response returned status %d", resp.ResponseCode)
+	}
+	if len(resp.JSONResponse) == 0 {
+		failAssertion(tb, "initialize response missing resp_json payload")
 	}
 	var envelope struct {
 		JSONRPC string `json:"jsonrpc"`
