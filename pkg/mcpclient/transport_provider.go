@@ -41,15 +41,15 @@ func (streamableTransportProvider) Build(params TransportBuildParams) (mcp.Trans
 	}, nil
 }
 
-type inMemoryTransportProvider struct {
-	transport *mcp.InMemoryTransport
+type injectableTransportProvider struct {
+	transport mcp.Transport
 }
 
-func (p inMemoryTransportProvider) Kind() config.MCPTransportKind {
+func (p injectableTransportProvider) Kind() config.MCPTransportKind {
 	return config.MCPTransportInMemory
 }
 
-func (p inMemoryTransportProvider) Build(TransportBuildParams) (mcp.Transport, error) {
+func (p injectableTransportProvider) Build(TransportBuildParams) (mcp.Transport, error) {
 	if p.transport == nil {
 		return nil, errors.New("mcpclient: in-memory transport requires injected transport")
 	}
@@ -57,18 +57,22 @@ func (p inMemoryTransportProvider) Build(TransportBuildParams) (mcp.Transport, e
 }
 
 type stdioTransportProvider struct {
-	transport *mcp.IOTransport
+	commandTransport *stdioCommandTransport
 }
 
 func (p stdioTransportProvider) Kind() config.MCPTransportKind {
 	return config.MCPTransportStdio
 }
 
-func (p stdioTransportProvider) Build(TransportBuildParams) (mcp.Transport, error) {
-	if p.transport == nil {
-		return nil, errors.New("mcpclient: stdio transport requires injected transport")
+func (p stdioTransportProvider) Build(params TransportBuildParams) (mcp.Transport, error) {
+	if p.commandTransport == nil {
+		return nil, errors.New("mcpclient: stdio transport requires mcp.command")
 	}
-	return newSharedConnectionTransport(p.transport), nil
+	transport, err := p.commandTransport.Transport(params.Config)
+	if err != nil {
+		return nil, err
+	}
+	return newSharedConnectionTransport(transport), nil
 }
 
 func selectTransportProvider(kind config.MCPTransportKind, providers []TransportProvider) (TransportProvider, error) {

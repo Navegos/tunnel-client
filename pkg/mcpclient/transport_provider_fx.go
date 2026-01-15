@@ -1,26 +1,32 @@
 package mcpclient
 
 import (
+	"log/slog"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/fx"
 )
 
-type inMemoryProviderParams struct {
+type injectableProviderParams struct {
 	fx.In
 
-	Transport *mcp.InMemoryTransport `optional:"true"`
+	Transport mcp.Transport `name:"mcp_injected_transport" optional:"true"`
 }
 
-func newInMemoryTransportProvider(p inMemoryProviderParams) TransportProvider {
-	return inMemoryTransportProvider{transport: p.Transport}
+func newInjectableTransportProvider(p injectableProviderParams) TransportProvider {
+	return injectableTransportProvider{transport: p.Transport}
 }
 
 type stdioProviderParams struct {
 	fx.In
 
-	Transport *mcp.IOTransport `optional:"true"`
+	Lifecycle  fx.Lifecycle
+	Shutdowner fx.Shutdowner
+	Logger     *slog.Logger
 }
 
 func newStdioTransportProvider(p stdioProviderParams) TransportProvider {
-	return stdioTransportProvider{transport: p.Transport}
+	return stdioTransportProvider{
+		commandTransport: newStdioCommandTransport(p.Logger, p.Lifecycle, p.Shutdowner),
+	}
 }

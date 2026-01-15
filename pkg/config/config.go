@@ -120,6 +120,8 @@ type ProcessConfig struct {
 // MCPConfig captures configuration for the Model Control Plane integration.
 type MCPConfig struct {
 	ServerURL             *url.URL
+	Command               string
+	CommandArgs           []string
 	TransportKind         MCPTransportKind
 	ConnectionMaxTTL      time.Duration
 	MaxConcurrentRequests int
@@ -208,6 +210,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.Bool("open-web-ui", false, "Open the embedded web UI in your default browser on startup (env.OPEN_WEB_UI)")
 	fs.String("pid.file", "", "File to write the tunnel-client process ID to (env.PID_FILE)")
 	fs.String("mcp.server-url", "", "Target MCP server URL (env.MCP_SERVER_URL)")
+	fs.String("mcp.command", "", "Command to launch an MCP server over stdio (env.MCP_COMMAND)")
 	fs.Duration("mcp.connection-max-ttl", defaultMCPConnectionMaxTTL, "Maximum lifetime of MCP transport connections (env.MCP_CONNECTION_MAX_TTL)")
 	fs.Int("mcp.max-concurrent-requests", defaultMCPMaxConcurrentRequests, "Maximum number of concurrent requests to the MCP server (env.MCP_MAX_CONCURRENT_REQUESTS)")
 
@@ -664,16 +667,39 @@ func resolveAllowRemoteUI(fs *pflag.FlagSet, lookupEnv func(string) (string, boo
 }
 
 func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (MCPConfig, error) {
+	commandRaw := firstSet(
+		getValue(fs, "mcp.command"),
+		envOrDefault(lookupEnv, "MCP_COMMAND", ""),
+	)
 	serverURLRaw := firstSet(
 		getValue(fs, "mcp.server-url"),
 		envOrDefault(lookupEnv, "MCP_SERVER_URL", ""),
 	)
-	if serverURLRaw == "" {
-		return MCPConfig{}, errors.New("MCP server URL is required; set --mcp.server-url or MCP_SERVER_URL")
+	if commandRaw != "" && serverURLRaw != "" {
+		return MCPConfig{}, errors.New("mcp.command and mcp.server-url are mutually exclusive; choose one")
 	}
-	serverURL, err := parseURL(serverURLRaw)
-	if err != nil {
-		return MCPConfig{}, fmt.Errorf("invalid mcp.server-url: %w", err)
+
+	transportKind := MCPTransportHTTPStreamable
+	var (
+		serverURL   *url.URL
+		commandArgs []string
+	)
+	switch {
+	case commandRaw != "":
+		transportKind = MCPTransportStdio
+		parsed, err := parseCommandArgv(commandRaw)
+		if err != nil {
+			return MCPConfig{}, fmt.Errorf("invalid mcp.command: %w", err)
+		}
+		commandArgs = parsed
+	case serverURLRaw != "":
+		parsed, err := parseURL(serverURLRaw)
+		if err != nil {
+			return MCPConfig{}, fmt.Errorf("invalid mcp.server-url: %w", err)
+		}
+		serverURL = parsed
+	default:
+		return MCPConfig{}, errors.New("MCP server URL or command is required; set --mcp.server-url, MCP_SERVER_URL, or --mcp.command")
 	}
 
 	ttlRaw := firstSet(
@@ -709,13 +735,91 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (M
 		maxConcurrent = val
 	}
 
+	var metadataURLs []*url.URL
+	if transportKind == MCPTransportHTTPStreamable && serverURL != nil {
+		metadataURLs = buildResourceMetadataURLs(serverURL)
+	}
+
 	return MCPConfig{
 		ServerURL:                 serverURL,
-		TransportKind:             MCPTransportHTTPStreamable,
+		Command:                   commandRaw,
+		CommandArgs:               commandArgs,
+		TransportKind:             transportKind,
 		ConnectionMaxTTL:          ttl,
 		MaxConcurrentRequests:     maxConcurrent,
-		OAuthResourceMetadataURLs: buildResourceMetadataURLs(serverURL),
+		OAuthResourceMetadataURLs: metadataURLs,
 	}, nil
+}
+
+func parseCommandArgv(raw string) ([]string, error) {
+	input := strings.TrimSpace(raw)
+	if input == "" {
+		return nil, errors.New("command is empty")
+	}
+	var (
+		args     []string
+		builder  strings.Builder
+		inSingle bool
+		inDouble bool
+		escaped  bool
+	)
+
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		if escaped {
+			builder.WriteByte(ch)
+			escaped = false
+			continue
+		}
+		if inSingle {
+			if ch == '\'' {
+				inSingle = false
+				continue
+			}
+			builder.WriteByte(ch)
+			continue
+		}
+		if inDouble {
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inDouble = false
+			default:
+				builder.WriteByte(ch)
+			}
+			continue
+		}
+		switch ch {
+		case '\\':
+			escaped = true
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case ' ', '\t', '\n', '\r':
+			if builder.Len() > 0 {
+				args = append(args, builder.String())
+				builder.Reset()
+			}
+		default:
+			builder.WriteByte(ch)
+		}
+	}
+
+	if escaped {
+		return nil, errors.New("unterminated escape sequence")
+	}
+	if inSingle || inDouble {
+		return nil, errors.New("unterminated quoted string")
+	}
+	if builder.Len() > 0 {
+		args = append(args, builder.String())
+	}
+	if len(args) == 0 {
+		return nil, errors.New("command is empty")
+	}
+	return args, nil
 }
 
 // String implements fmt.Stringer.

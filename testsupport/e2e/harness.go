@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ type harnessConfig struct {
 	scenarioTimeout     time.Duration
 	logWriter           io.Writer
 	mcpTransportKind    config.MCPTransportKind
+	mcpCommandArgs      []string
 }
 
 // HarnessOption customizes the E2E harness configuration.
@@ -93,6 +95,14 @@ func WithInMemoryMCPTransport() HarnessOption {
 	}
 }
 
+// WithMCPCommand configures the client to launch an MCP server over stdio.
+func WithMCPCommand(commandArgs []string) HarnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.mcpTransportKind = config.MCPTransportStdio
+		cfg.mcpCommandArgs = append([]string{}, commandArgs...)
+	}
+}
+
 // Harness wires together the mock control plane, mock MCP server, and a running tunnel-client.
 type Harness struct {
 	ControlPlane  *mocktunnelservice.MockTunnelService
@@ -103,7 +113,6 @@ type Harness struct {
 	tunnelStarted bool
 	mcpStarted    bool
 	inMemoryMCP   *mcp.InMemoryTransport
-	stdioMCP      *mcp.IOTransport
 	logWriter     io.Writer
 	logBuffer     *bytes.Buffer
 }
@@ -154,6 +163,11 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 			ConnectionMaxTTL:      time.Minute,
 			MaxConcurrentRequests: 1,
 		},
+	}
+	if len(cfg.mcpCommandArgs) > 0 {
+		clientCfg.MCP.CommandArgs = append([]string{}, cfg.mcpCommandArgs...)
+		clientCfg.MCP.Command = strings.Join(cfg.mcpCommandArgs, " ")
+		clientCfg.MCP.TransportKind = config.MCPTransportStdio
 	}
 	if cfg.clientCustomizer != nil {
 		cfg.clientCustomizer(clientCfg)
@@ -245,7 +259,8 @@ func (h *Harness) startMCPServer(t testing.TB) {
 	case config.MCPTransportInMemory:
 		h.inMemoryMCP = h.MCP.StartInMemory(t)
 	case config.MCPTransportStdio:
-		h.stdioMCP = h.MCP.StartStdio(t)
+		h.mcpStarted = true
+		return
 	default:
 		h.MCP.Start(t)
 		if h.MCP.BaseURL() == nil {
@@ -292,8 +307,8 @@ func (h *Harness) startClient(t testing.TB) {
 			t.Fatalf("mock MCP in-memory transport must be started before the client")
 			return
 		}
-		if transportKind == config.MCPTransportStdio && h.stdioMCP == nil {
-			t.Fatalf("mock MCP stdio transport must be started before the client")
+		if transportKind == config.MCPTransportStdio && len(cfg.MCP.CommandArgs) == 0 {
+			t.Fatalf("mcp.command is required for stdio transport")
 			return
 		}
 	default:
@@ -309,10 +324,10 @@ func (h *Harness) startClient(t testing.TB) {
 		fx.WithLogger(func(*slog.Logger) fxevent.Logger { return fxevent.NopLogger }),
 	}
 	if h.inMemoryMCP != nil {
-		options = append(options, fx.Supply(h.inMemoryMCP))
-	}
-	if h.stdioMCP != nil {
-		options = append(options, fx.Supply(h.stdioMCP))
+		options = append(options, fx.Provide(fx.Annotate(
+			func() mcp.Transport { return h.inMemoryMCP },
+			fx.ResultTags(`name:"mcp_injected_transport"`),
+		)))
 	}
 	app := fxtest.New(t, app.Options(cfg, options...)...)
 	app.RequireStart()

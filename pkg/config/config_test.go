@@ -536,8 +536,112 @@ func TestLoadRequiresMCPServerURL(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when MCP server URL missing")
 	}
-	if !strings.Contains(err.Error(), "MCP server URL is required") {
+	if !strings.Contains(err.Error(), "MCP server URL or command is required") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadUsesMCPCommand(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.command", `echo "hello world"`,
+	}
+	cfg, err := Load(args, func(key string) (string, bool) {
+		switch key {
+		case "OPENAI_API_KEY":
+			return "key", true
+		default:
+			return "", false
+		}
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.MCP.TransportKind != MCPTransportStdio {
+		t.Fatalf("expected MCP transport stdio, got %s", cfg.MCP.TransportKind)
+	}
+	if cfg.MCP.ServerURL != nil {
+		t.Fatalf("expected MCP server URL to be nil for stdio transport")
+	}
+	if cfg.MCP.Command == "" {
+		t.Fatalf("expected MCP command to be set")
+	}
+	if got := cfg.MCP.CommandArgs; len(got) != 2 || got[0] != "echo" || got[1] != "hello world" {
+		t.Fatalf("unexpected MCP command args: %v", got)
+	}
+	if len(cfg.MCP.OAuthResourceMetadataURLs) != 0 {
+		t.Fatalf("expected no OAuth metadata URLs for stdio transport")
+	}
+}
+
+func TestLoadRejectsMCPCommandAndServerURL(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "https://flag-mcp",
+		"--mcp.command", "echo hello",
+	}
+	_, err := Load(args, func(key string) (string, bool) {
+		if key == "OPENAI_API_KEY" {
+			return "key", true
+		}
+		return "", false
+	})
+	if err == nil {
+		t.Fatalf("expected error when mcp.command and mcp.server-url are both set")
+	}
+	if !strings.Contains(err.Error(), "mcp.command and mcp.server-url are mutually exclusive") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseCommandArgv(t *testing.T) {
+	testCases := map[string]struct {
+		raw     string
+		want    []string
+		wantErr bool
+	}{
+		"simple": {
+			raw:  "python -m server --flag value",
+			want: []string{"python", "-m", "server", "--flag", "value"},
+		},
+		"double-quotes": {
+			raw:  `node "path with spaces/app.js" --name="Ada Lovelace"`,
+			want: []string{"node", "path with spaces/app.js", "--name=Ada Lovelace"},
+		},
+		"single-quotes": {
+			raw:  "bash -c 'echo hello world'",
+			want: []string{"bash", "-c", "echo hello world"},
+		},
+		"escaped-space": {
+			raw:  `cmd hello\ world`,
+			want: []string{"cmd", "hello world"},
+		},
+		"unterminated-quote": {
+			raw:     `echo "unterminated`,
+			wantErr: true,
+		},
+		"empty": {
+			raw:     "   ",
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseCommandArgv(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !equalStringSlices(got, tc.want) {
+				t.Fatalf("unexpected argv: got %v want %v", got, tc.want)
+			}
+		})
 	}
 }
 

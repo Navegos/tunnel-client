@@ -76,6 +76,7 @@ $(dir $(BIN)):
 
 clean:
 	-rm -f $(BIN) $(STABLE_BIN)
+	-go clean -cache -testcache
 
 IMAGE_NAME    := openai/tunnel-client
 IMAGE_TAG     := $(if $(GIT_SHA),$(GIT_SHA),latest)

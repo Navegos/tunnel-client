@@ -25,7 +25,7 @@ var Module = fx.Module(
 	fx.Provide(
 		newMcpClient,
 		fx.Annotate(newStreamableTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
-		fx.Annotate(newInMemoryTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
+		fx.Annotate(newInjectableTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
 		fx.Annotate(newStdioTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
 	),
 	fx.Invoke(probeMcpServer),

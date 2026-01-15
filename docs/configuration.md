@@ -3,7 +3,7 @@
 `tunnel-client` can be configured via CLI flags or environment variables.
 
 - **Precedence**: flags > environment variables > defaults.
-- **Requirement**: you must provide a control-plane API key, a tunnel ID, and an MCP server URL.
+- **Requirement**: you must provide a control-plane API key, a tunnel ID, and either an MCP server URL or an MCP command.
 
 ## Commands
 
@@ -47,7 +47,13 @@
 - **Server URL**
   - Flag: `--mcp.server-url`
   - Env: `MCP_SERVER_URL`
-  - Required: yes
+  - Required: yes (unless `--mcp.command` is provided)
+- **Command (stdio transport)**
+  - Flag: `--mcp.command`
+  - Env: `MCP_COMMAND`
+  - Required: yes (unless `--mcp.server-url` is provided)
+  - Behavior: spawns the command once and uses the child process stdin/stdout for MCP frames
+  - Note: stdio transport does not support MCP sessions
 - **Connection max TTL**
   - Flag: `--mcp.connection-max-ttl`
   - Env: `MCP_CONNECTION_MAX_TTL`
@@ -143,6 +149,18 @@ export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
 export MCP_SERVER_URL="https://mcp.internal.example.com/mcp"
 
 ./bin/tunnel-client run --log.level=info --log.format=struct-text
+```
+
+### Stdio MCP command
+
+```bash
+export CONTROL_PLANE_API_KEY="sk-..."
+export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
+
+./bin/tunnel-client run \
+  --mcp.command "python -m my_mcp_server --stdio" \
+  --log.level=info \
+  --log.format=struct-text
 ```
 
 ### API key via file
