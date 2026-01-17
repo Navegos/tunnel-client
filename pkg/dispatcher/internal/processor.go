@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -347,10 +348,23 @@ func (p *mcpProcessor) forwardResponses(ctx context.Context, conn mcpclient.Forw
 		}
 
 		// Ensure final JSON-RPC responses present as application/json to the control plane,
-		// even if the upstream server labeled them differently.
-		if responseHeaders.Get("Content-Type") != "" {
-			logger.DebugContext(ctx, "overriding Content-Type header", slog.String("original", responseHeaders.Get("Content-Type")), slog.String("new", "application/json"))
-			responseHeaders = responseHeaders.Clone()
+		// even if the upstream server labeled them differently, unless the upstream
+		// response is already an SSE stream.
+		contentType := ""
+		if responseHeaders != nil {
+			contentType = responseHeaders.Get("Content-Type")
+		}
+		if contentType == "" || !isSSEContentType(contentType) {
+			if responseHeaders == nil {
+				responseHeaders = http.Header{}
+			} else {
+				responseHeaders = responseHeaders.Clone()
+			}
+			originalValue := contentType
+			if originalValue == "" {
+				originalValue = "<empty>"
+			}
+			logger.DebugContext(ctx, "overriding Content-Type header", slog.String("original", originalValue), slog.String("new", "application/json"))
 			responseHeaders.Set("Content-Type", "application/json")
 		}
 
@@ -465,6 +479,13 @@ func attrsToArgs(attrs []slog.Attr) []any {
 		args[i] = attr
 	}
 	return args
+}
+
+func isSSEContentType(value string) bool {
+	if value == "" {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "text/event-stream")
 }
 
 func buildJSONRPCErrorResponse(req *jsonrpc.Request, statusCode int, cause error) ([]byte, error) {

@@ -404,7 +404,7 @@ func TestProcessorLogsIncludeRequestAndSessionID(t *testing.T) {
 	}
 }
 
-func TestProcessorOverridesContentTypeHeader(t *testing.T) {
+func TestProcessorPreservesSSEContentTypeHeader(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -417,6 +417,60 @@ func TestProcessorOverridesContentTypeHeader(t *testing.T) {
 		conn: &stubForwardingConnection{
 			responseHeaders: http.Header{
 				http.CanonicalHeaderKey("Content-Type"): []string{"text/event-stream"},
+			},
+			response: &jsonrpc.Response{
+				ID:     id,
+				Result: json.RawMessage(`{"ok":true}`),
+			},
+		},
+	}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("content-type-request"),
+		message:    &jsonrpc.Request{ID: id, Method: "ping"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-content-type",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	require.NoError(t, processor.Process(ctx, cmd))
+	resp := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, resp.requestID)
+	require.Equal(t, "text/event-stream", resp.response.Headers().Get("Content-Type"))
+
+	jsonResp := decodeJSONRPCResponse(t, resp.response.Payload())
+	require.NotNil(t, jsonResp)
+	require.Equal(t, id, jsonResp.ID)
+}
+
+func TestProcessorOverridesNonStreamingContentTypeHeader(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	id, err := jsonrpc.MakeID("content-type-override")
+	require.NoError(t, err)
+
+	transport := &stubForwardingTransport{
+		conn: &stubForwardingConnection{
+			responseHeaders: http.Header{
+				http.CanonicalHeaderKey("Content-Type"): []string{"text/plain"},
 			},
 			response: &jsonrpc.Response{
 				ID:     id,
@@ -515,7 +569,7 @@ func TestProcessorForwardsNotificationsWithJSONContentType(t *testing.T) {
 
 	final := responses[1]
 	require.Equal(t, types.ResponseTypeJSONRPCResponse, final.response.Type())
-	require.Equal(t, "application/json", final.response.Headers().Get("Content-Type"))
+	require.Equal(t, "text/event-stream", final.response.Headers().Get("Content-Type"))
 	jsonResp := decodeJSONRPCResponse(t, final.response.Payload())
 	require.NotNil(t, jsonResp)
 	require.Equal(t, callID, jsonResp.ID)
