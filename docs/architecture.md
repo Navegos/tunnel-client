@@ -45,6 +45,7 @@ flowchart LR
 - **Queueing/backpressure**: the control-plane poller requests up to the number of available slots in the bounded queue to avoid unbounded buffering.
 - **Progress/notifications**: MCP JSON-RPC notifications are posted via `/v1/tunnel/{tunnel_id}/response` using `resp_type=jsonrpc_notify` and are forwarded to the connector when SSE is enabled.
 - **Streaming semantics**: the client can stream intermediate JSON-RPC notifications over SSE when the connector requests `text/event-stream`, then posts a final JSON-RPC response to close the stream.
+- **Connector GET not supported**: `/v1/mcp` only accepts POST requests; `GET /v1/mcp` does not provide an SSE stream.
 
 ## OAuth-protected MCP
 

@@ -388,6 +388,7 @@ On your MCP server, confirm you observe:
 - It enqueues the request under your `tunnel_id`.
 - It waits (holds the HTTP request open) for the tunnel client to return the final response.
 - If the connector includes `Accept: text/event-stream`, the response is streamed as SSE, with JSON-RPC notifications forwarded as they arrive and a final JSON-RPC response closing the stream.
+- `GET /v1/mcp` is not supported; connectors must use POST.
 
 ### Tunnel-client control-plane endpoints: `/v1/tunnel/{tunnel_id}/poll` and `/response`
 
