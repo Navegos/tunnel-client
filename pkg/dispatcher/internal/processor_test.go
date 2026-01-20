@@ -131,6 +131,58 @@ func TestProcessorForwardResponses(t *testing.T) {
 	require.Equal(t, "1.0.0", result.ServerInfo.Version)
 }
 
+func TestProcessorAddsDefaultAcceptHeaderWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	responder := newRecordingResponder()
+	processorLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	conn := &stubForwardingConnection{
+		statusCode: http.StatusOK,
+		responseHeaders: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+	}
+	id, err := jsonrpc.MakeID("accept-req")
+	require.NoError(t, err)
+	conn.response = &jsonrpc.Response{
+		ID:     id,
+		Result: json.RawMessage(`{"ok":true}`),
+	}
+	transport := &stubForwardingTransport{conn: conn}
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          processorLogger,
+		Transport:       transport,
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	command := &fakePolledCommand{
+		id:         types.RequestID("request-id"),
+		message:    &jsonrpc.Request{ID: id, Method: "initialize"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		headers: http.Header{
+			"x-test": []string{"value"},
+		},
+		shardToken: "shard-request-id",
+	}
+
+	err = processor.Process(ctx, command)
+	require.NoError(t, err)
+
+	_ = responder.waitForResponse(t)
+	require.NotNil(t, conn.writeHeaders)
+	require.Equal(t, defaultAcceptHeaderValue, conn.writeHeaders.Get("Accept"))
+}
+
 func TestProcessorStreamableNotificationsBeforeResponse(t *testing.T) {
 	t.Parallel()
 
@@ -2032,9 +2084,15 @@ type stubForwardingConnection struct {
 	response        jsonrpc.Message
 	statusCode      int
 	writeErr        error
+	writeHeaders    http.Header
 }
 
-func (c *stubForwardingConnection) Write(context.Context, http.Header, jsonrpc.Message) (int, http.Header, error) {
+func (c *stubForwardingConnection) Write(_ context.Context, headers http.Header, _ jsonrpc.Message) (int, http.Header, error) {
+	if headers == nil {
+		c.writeHeaders = nil
+	} else {
+		c.writeHeaders = headers.Clone()
+	}
 	return c.statusCode, c.responseHeaders, c.writeErr
 }
 

@@ -27,6 +27,7 @@ import (
 
 const (
 	defaultOAuthDiscoveryTimeout = 5 * time.Second
+	defaultAcceptHeaderValue     = "application/json, text/event-stream"
 )
 
 // Processor forwards polled control plane commands to the downstream MCP server.
@@ -174,7 +175,8 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 
 	//TODO(denyska): upon receiving SessionTermination command, issue conn.Close() that will do DELETE
 
-	statusCode, respHeader, err := conn.Write(ctx, cmd.Headers(), req)
+	headers := ensureDefaultAcceptHeader(cmd.Headers())
+	statusCode, respHeader, err := conn.Write(ctx, headers, req)
 	statusCode = normalizeTransportStatusCode(statusCode, err)
 	if err != nil || statusCode >= http.StatusBadRequest {
 		status := statusCode
@@ -510,6 +512,18 @@ func buildJSONRPCErrorResponse(req *jsonrpc.Request, statusCode int, cause error
 		},
 	}
 	return jsonrpc.EncodeMessage(resp)
+}
+
+func ensureDefaultAcceptHeader(headers http.Header) http.Header {
+	if headers == nil {
+		headers = http.Header{}
+	}
+	if headers.Get("Accept") != "" {
+		return headers
+	}
+	clone := headers.Clone()
+	clone.Set("Accept", defaultAcceptHeaderValue)
+	return clone
 }
 
 func normalizeTransportStatusCode(statusCode int, err error) int {
