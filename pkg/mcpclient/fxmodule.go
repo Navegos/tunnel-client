@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openai.org/api/tunnel-client/pkg/config"
@@ -31,6 +32,8 @@ var Module = fx.Module(
 	),
 	fx.Invoke(probeMcpServer),
 )
+
+const defaultProbeTimeout = 2 * time.Second
 
 type clientParams struct {
 	fx.In
@@ -125,7 +128,6 @@ func probeMcpServer(p runnerParams) error {
 
 	logger := p.Logger.With(tclog.FieldComponent, tclog.ComponentMcpClient)
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
 
 	p.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
@@ -134,8 +136,9 @@ func probeMcpServer(p runnerParams) error {
 				slog.String("target", transportTargetLabel(transportKind, p.Config.ServerURL)),
 			)
 			go func() {
-				defer close(done)
-				sess, err := p.Client.Connect(ctx, p.Transport, nil)
+				probeCtx, probeCancel := context.WithTimeout(ctx, defaultProbeTimeout)
+				defer probeCancel()
+				sess, err := p.Client.Connect(probeCtx, p.Transport, nil)
 				if err != nil {
 					logger.ErrorContext(ctx, "failed to connect to mcp", slog.String("error", err.Error()))
 					return
@@ -161,7 +164,6 @@ func probeMcpServer(p runnerParams) error {
 		},
 		OnStop: func(context.Context) error {
 			cancel()
-			<-done
 			return nil
 		},
 	})

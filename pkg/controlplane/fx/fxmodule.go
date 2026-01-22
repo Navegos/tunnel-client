@@ -141,10 +141,14 @@ func runMetadataFetch(p metadataParams) error {
 			}()
 			return nil
 		},
-		OnStop: func(context.Context) error {
+		OnStop: func(stopCtx context.Context) error {
 			cancel()
-			<-done
-			return nil
+			select {
+			case <-done:
+				return nil
+			case <-stopCtx.Done():
+				return stopCtx.Err()
+			}
 		},
 	})
 
@@ -165,11 +169,15 @@ func runPoller(p runnerParams) error {
 			}()
 			return nil
 		},
-		OnStop: func(context.Context) error {
+		OnStop: func(stopCtx context.Context) error {
 			logger.InfoContext(ctx, "stopping control-plane poller")
 			cancel()
-			<-done
-			return nil
+			select {
+			case <-done:
+				return nil
+			case <-stopCtx.Done():
+				return stopCtx.Err()
+			}
 		},
 	})
 
