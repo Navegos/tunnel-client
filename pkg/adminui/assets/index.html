@@ -23,6 +23,7 @@
     <div class="tabs">
       <button class="tab" data-tab="overview" aria-selected="true">Overview</button>
       <button class="tab" data-tab="metrics" aria-selected="false">Metrics</button>
+      <button class="tab" data-tab="oauth" aria-selected="false">OAuth</button>
       <button class="tab" data-tab="logs" aria-selected="false">Logs</button>
       <span style="flex: 1"></span>
       <a class="small muted" href="/metrics" target="_blank" rel="noreferrer">open /metrics</a>
@@ -37,7 +38,6 @@
             <div class="muted">Uptime</div><div class="mono" id="vUptime">—</div>
             <div class="muted">Health addr</div><div class="mono" id="vHealthAddr">—</div>
             <div class="muted">MCP server</div><div class="mono" id="vMcpUrl">—</div>
-            <div class="muted">OAuth discovery URLs</div><div class="mono" id="vOAuthMetadataUrls">—</div>
           </div>
         </div>
         <div class="card span-6">
@@ -96,6 +96,39 @@
           <details style="margin-top: 12px">
             <summary class="muted">Raw metrics</summary>
             <pre class="pre mono" id="metricsRaw" style="margin-top: 10px"></pre>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-oauth" aria-hidden="true">
+      <div class="grid">
+        <div class="card span-6">
+          <div class="row">
+            <div>
+              <div class="muted small">OAuth discovery URLs</div>
+              <div class="small muted">Ordered list of discovery candidates</div>
+            </div>
+            <span style="flex:1"></span>
+            <button id="refreshOAuth">Refresh</button>
+            <span id="oauthErr" class="muted small"></span>
+          </div>
+          <div class="mono" id="oauthDiscoveryUrls" style="margin-top: 12px">—</div>
+        </div>
+        <div class="card span-6">
+          <div class="muted small">OAuth metadata</div>
+          <div class="kv" style="margin-top: 8px">
+            <div class="muted">Status</div><div class="mono" id="oauthStatus">—</div>
+            <div class="muted">Fetched at</div><div class="mono" id="oauthFetchedAt">—</div>
+            <div class="muted">Source URL</div><div class="mono" id="oauthSourceUrl">—</div>
+          </div>
+          <details style="margin-top: 12px">
+            <summary class="muted">Headers</summary>
+            <pre class="pre mono" id="oauthHeaders" style="margin-top: 10px"></pre>
+          </details>
+          <details style="margin-top: 12px">
+            <summary class="muted">Body</summary>
+            <pre class="pre mono" id="oauthBody" style="margin-top: 10px"></pre>
           </details>
         </div>
       </div>

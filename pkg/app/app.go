@@ -13,6 +13,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/metrics"
+	"go.openai.org/api/tunnel-client/pkg/oauth"
 	"go.openai.org/api/tunnel-client/pkg/process"
 )
 
@@ -39,6 +40,7 @@ func Options(cfg *config.Config, opts ...fx.Option) []fx.Option {
 		controlplane.Module,
 		mcpclient.Module,
 		metrics.MetricModule,
+		oauth.Module,
 		process.Module,
 		health.HealthMuxModule,
 		fx.Invoke(func(health.Service) {}),

@@ -1,4 +1,4 @@
-package dispatcherinternal
+package oauth
 
 import (
 	"bytes"
@@ -44,13 +44,14 @@ func TestFetchOAuthMetadataFallsBackToRoot(t *testing.T) {
 	client := server.Client()
 	client.Timeout = 2 * time.Second
 
-	resp, fetchErr := fetchOAuthMetadata(
+	resp, sourceURL, fetchErr := FetchOAuthMetadata(
 		context.Background(),
 		client,
 		urls,
 		slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError})),
 	)
 	require.NoError(t, fetchErr)
+	require.NotNil(t, sourceURL)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.Equal(t, "application/json", resp.Headers().Get("Content-Type"))
 	require.JSONEq(t, fmt.Sprintf(`{"resource":"%s"}`, baseURL.Host), string(resp.Payload()))
@@ -59,7 +60,7 @@ func TestFetchOAuthMetadataFallsBackToRoot(t *testing.T) {
 func TestFetchOAuthMetadataNoURLs(t *testing.T) {
 	t.Parallel()
 
-	_, err := fetchOAuthMetadata(context.Background(), &http.Client{Timeout: time.Second}, nil, nil)
+	_, _, err := FetchOAuthMetadata(context.Background(), &http.Client{Timeout: time.Second}, nil, nil)
 	require.Error(t, err)
 }
 
@@ -92,7 +93,7 @@ func TestFetchOAuthMetadataRetriesOn5xxThenSucceeds(t *testing.T) {
 	client := server.Client()
 	client.Timeout = 2 * time.Second
 
-	resp, fetchErr := fetchOAuthMetadata(context.Background(), client, cfg.OAuthResourceMetadataURLs, nil)
+	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, cfg.OAuthResourceMetadataURLs, nil)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.EqualValues(t, 1, baseCalls)
@@ -117,7 +118,7 @@ func TestFetchOAuthMetadataAllFailuresReturnError(t *testing.T) {
 
 	client := &http.Client{Timeout: time.Second}
 
-	_, fetchErr := fetchOAuthMetadata(context.Background(), client, []*url.URL{closedURL, errorURL}, nil)
+	_, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{closedURL, errorURL}, nil)
 	require.Error(t, fetchErr)
 }
 
@@ -135,7 +136,7 @@ func TestFetchOAuthMetadataEmptyBodyIsError(t *testing.T) {
 	client := server.Client()
 	client.Timeout = time.Second
 
-	_, fetchErr := fetchOAuthMetadata(context.Background(), client, []*url.URL{u}, nil)
+	_, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u}, nil)
 	require.Error(t, fetchErr)
 	require.Contains(t, fetchErr.Error(), "empty body")
 }
@@ -165,7 +166,7 @@ func TestFetchOAuthMetadataFallsBackOn5xxEmptyBody(t *testing.T) {
 	client := server.Client()
 	client.Timeout = 2 * time.Second
 
-	resp, fetchErr := fetchOAuthMetadata(context.Background(), client, cfg.OAuthResourceMetadataURLs, nil)
+	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, cfg.OAuthResourceMetadataURLs, nil)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.GreaterOrEqual(t, calls, 2)
@@ -193,7 +194,7 @@ func TestFetchOAuthMetadataReadErrorIsReturned(t *testing.T) {
 		Timeout: time.Second,
 	}
 
-	_, fetchErr := fetchOAuthMetadata(context.Background(), client, []*url.URL{u}, nil)
+	_, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u}, nil)
 	require.Error(t, fetchErr)
 	require.Contains(t, fetchErr.Error(), "read failed")
 }
@@ -226,7 +227,7 @@ func TestFetchOAuthMetadataRetriesOnNetworkError(t *testing.T) {
 		Timeout: time.Second,
 	}
 
-	resp, fetchErr := fetchOAuthMetadata(context.Background(), client, []*url.URL{u1, nil, u2}, nil)
+	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u1, nil, u2}, nil)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.GreaterOrEqual(t, calls, 2)
@@ -236,7 +237,7 @@ func TestFetchOAuthMetadataReturnsNoResponsesWhenAllCandidatesNil(t *testing.T) 
 	t.Parallel()
 
 	client := &http.Client{Timeout: time.Second}
-	_, err := fetchOAuthMetadata(context.Background(), client, []*url.URL{nil, nil}, nil)
+	_, _, err := FetchOAuthMetadata(context.Background(), client, []*url.URL{nil, nil}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no responses")
 }
@@ -268,7 +269,7 @@ func TestFetchOAuthMetadataRetriesOnNetworkErrorWithLogger(t *testing.T) {
 		Timeout: time.Second,
 	}
 
-	resp, fetchErr := fetchOAuthMetadata(context.Background(), client, []*url.URL{u1, u2}, logger)
+	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u1, u2}, logger)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.GreaterOrEqual(t, calls, 2)
@@ -306,7 +307,7 @@ func TestFetchOAuthMetadataRetriesOn5xxReadErrorThenSucceeds(t *testing.T) {
 		Timeout: time.Second,
 	}
 
-	resp, fetchErr := fetchOAuthMetadata(context.Background(), client, []*url.URL{u1, u2}, logger)
+	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u1, u2}, logger)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.GreaterOrEqual(t, calls, 2)

@@ -1,6 +1,6 @@
 (function () {
   const $ = (id) => document.getElementById(id);
-  const panels = ["overview", "metrics", "logs"];
+  const panels = ["overview", "metrics", "oauth", "logs"];
   const tabs = Array.from(document.querySelectorAll(".tab"));
 
   function selectTab(name) {
@@ -89,8 +89,8 @@
     });
   }
 
-  function renderOAuthMetadataUrls(urls) {
-    const list = $("vOAuthMetadataUrls");
+  function renderOAuthDiscoveryUrls(urls) {
+    const list = $("oauthDiscoveryUrls");
     list.textContent = "";
     if (!urls || urls.length === 0) {
       list.textContent = "—";
@@ -103,6 +103,54 @@
     });
   }
 
+  function fmtTimestamp(ts) {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return ts;
+    const ageSec = Math.floor((Date.now() - d.getTime()) / 1000);
+    return d.toISOString() + " (" + fmtUptime(ageSec) + " ago)";
+  }
+
+  function renderOAuthMetadata(meta, err, pending) {
+    const statusEl = $("oauthStatus");
+    if (err) {
+      statusEl.textContent = "error";
+    } else if (pending) {
+      statusEl.textContent = "pending";
+    } else if (meta) {
+      statusEl.textContent = meta.status_code || "—";
+    } else {
+      statusEl.textContent = "—";
+    }
+    $("oauthFetchedAt").textContent = meta
+      ? fmtTimestamp(meta.fetched_at)
+      : "—";
+    $("oauthSourceUrl").textContent = meta ? meta.url || "—" : "—";
+
+    if (err) {
+      $("oauthHeaders").textContent = "";
+      $("oauthBody").textContent = "";
+      return;
+    }
+
+    const headers = meta && meta.headers ? meta.headers : null;
+    $("oauthHeaders").textContent = headers
+      ? JSON.stringify(headers, null, 2)
+      : "";
+
+    if (meta) {
+      if (meta.body) {
+        $("oauthBody").textContent = JSON.stringify(meta.body, null, 2);
+      } else if (meta.body_text) {
+        $("oauthBody").textContent = meta.body_text;
+      } else {
+        $("oauthBody").textContent = "";
+      }
+    } else {
+      $("oauthBody").textContent = "";
+    }
+  }
+
   async function refreshStatus() {
     try {
       const s = await fetchJSON("/api/status");
@@ -112,7 +160,6 @@
       $("vUptime").textContent = fmtUptime(s.uptime_seconds || 0);
       $("vHealthAddr").textContent = s.health_listen_addr || "—";
       $("vMcpUrl").textContent = s.mcp_server_url || "—";
-      renderOAuthMetadataUrls(s.mcp_resource_metadata_urls);
       $("vCpBase").textContent = s.control_plane_base_url || "—";
       $("vTunnelId").textContent = s.control_plane_tunnel_id || "—";
       $("vPollTimeout").textContent = s.control_plane_poll_timeout || "—";
@@ -129,6 +176,24 @@
   $("copyTunnelId").addEventListener("click", () =>
     copy($("vTunnelId").textContent)
   );
+
+  // ---- OAuth ----
+  async function refreshOAuth() {
+    $("oauthErr").textContent = "";
+    try {
+      const o = await fetchJSON("/api/oauth");
+      renderOAuthDiscoveryUrls(o.discovery_urls);
+      renderOAuthMetadata(o.metadata, o.error, o.pending);
+      if (o.error) {
+        $("oauthErr").textContent = o.error;
+      }
+    } catch (e) {
+      $("oauthErr").textContent = "error: " + e;
+      renderOAuthMetadata(null, e, false);
+    }
+  }
+
+  $("refreshOAuth").addEventListener("click", refreshOAuth);
 
   // ---- Metrics ----
   function parseMetrics(text) {
@@ -470,9 +535,11 @@
     await refreshHealth();
     await refreshStatus();
     await refreshMetrics();
+    await refreshOAuth();
     await startLogs();
 
     setInterval(refreshHealth, 5000);
     setInterval(refreshStatus, 10000);
+    setInterval(refreshOAuth, 15000);
   })();
 })();

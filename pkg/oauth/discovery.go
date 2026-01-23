@@ -1,4 +1,4 @@
-package dispatcherinternal
+package oauth
 
 import (
 	"context"
@@ -12,13 +12,16 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
 
-// fetchOAuthMetadata attempts to retrieve OAuth protected resource metadata
+// FetchOAuthMetadata attempts to retrieve OAuth protected resource metadata
 // from the provided candidates (path-specific first, then root). It returns
 // the first successful response with a non-empty body, falling back on 5xx/404
 // responses and network errors until all options are exhausted.
-func fetchOAuthMetadata(ctx context.Context, client *http.Client, metadataURLs []*url.URL, logger *slog.Logger) (*types.TunnelResponse, error) {
+func FetchOAuthMetadata(ctx context.Context, client *http.Client, metadataURLs []*url.URL, logger *slog.Logger) (*types.TunnelResponse, *url.URL, error) {
+	if client == nil {
+		return nil, nil, fmt.Errorf("oauth discovery: http client is nil")
+	}
 	if len(metadataURLs) == 0 {
-		return nil, fmt.Errorf("oauth discovery: no metadata URLs configured")
+		return nil, nil, fmt.Errorf("oauth discovery: no metadata URLs configured")
 	}
 
 	var lastErr error
@@ -54,7 +57,7 @@ func fetchOAuthMetadata(ctx context.Context, client *http.Client, metadataURLs [
 				}
 				continue
 			}
-			return nil, lastErr
+			return nil, nil, lastErr
 		}
 
 		if len(body) == 0 {
@@ -65,7 +68,7 @@ func fetchOAuthMetadata(ctx context.Context, client *http.Client, metadataURLs [
 				}
 				continue
 			}
-			return nil, lastErr
+			return nil, nil, lastErr
 		}
 
 		// Retry on known fallback-friendly statuses.
@@ -77,11 +80,11 @@ func fetchOAuthMetadata(ctx context.Context, client *http.Client, metadataURLs [
 			continue
 		}
 
-		return types.NewOAuthDiscoveryResponse(body, resp.StatusCode, resp.Header), nil
+		return types.NewOAuthDiscoveryResponse(body, resp.StatusCode, resp.Header), u, nil
 	}
 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("oauth discovery: no responses")
 	}
-	return nil, lastErr
+	return nil, nil, lastErr
 }

@@ -21,13 +21,13 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
+	"go.openai.org/api/tunnel-client/pkg/oauth"
 	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
 const (
-	defaultOAuthDiscoveryTimeout = 5 * time.Second
-	defaultAcceptHeaderValue     = "application/json, text/event-stream"
+	defaultAcceptHeaderValue = "application/json, text/event-stream"
 )
 
 // Processor forwards polled control plane commands to the downstream MCP server.
@@ -248,7 +248,7 @@ func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger 
 		return fmt.Errorf("dispatcher processor: missing oauth metadata URLs")
 	}
 
-	resp, err := fetchOAuthMetadata(ctx, p.oauthHTTPClient, p.oauthMetadataURLs, logger)
+	resp, _, err := oauth.FetchOAuthMetadata(ctx, p.oauthHTTPClient, p.oauthMetadataURLs, logger)
 	if err != nil {
 		logger.ErrorContext(ctx, "failed to fetch oauth discovery metadata", slog.String("error", err.Error()))
 		return err

@@ -20,7 +20,8 @@ The tunnel client is an enterprise-hosted agent that connects your internal MCP 
 - On startup, it fetches tunnel metadata for operator visibility:
   - `GET /v1/tunnels/{tunnel_id}`
 - It forwards the received JSON-RPC requests to your configured MCP server over HTTP(S).
-- It exposes an **admin/health server** (`/healthz`, `/readyz`, `/metrics`) for probes and Prometheus scraping.
+- On startup, it fetches OAuth protected resource metadata from the MCP server for diagnostics.
+- It exposes an **admin/health server** (`/healthz`, `/readyz`, `/metrics`) and a lightweight **admin UI** (`/ui`) for operational status.
 
 ## CLI
 

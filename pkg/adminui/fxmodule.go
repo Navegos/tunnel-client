@@ -12,6 +12,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.openai.org/api/tunnel-client/pkg/health"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
+	"go.openai.org/api/tunnel-client/pkg/oauth"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
 
@@ -38,6 +39,7 @@ type routeParams struct {
 	MCPConfig     *config.MCPConfig
 	AdminUIConfig *config.AdminUIConfig
 	MetadataState *controlplane.MetadataState
+	OAuthState    *oauth.DiscoveryState
 }
 
 type statusResponse struct {
@@ -76,6 +78,9 @@ func registerRoutes(p routeParams) error {
 	p.AdminMux.Handle("/assets/", guard(handleAssets()))
 	p.AdminMux.Handle("/api/status", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, buildStatus(p))
+	})))
+	p.AdminMux.Handle("/api/oauth", guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, buildOAuthStatus(p))
 	})))
 	p.AdminMux.Handle("/api/logs", guard(http.HandlerFunc(handleLogsJSON(p.Buffer))))
 	p.AdminMux.Handle("/api/logs/stream", guard(http.HandlerFunc(handleLogsStream(p.Buffer))))
