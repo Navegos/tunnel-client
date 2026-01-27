@@ -729,6 +729,10 @@ type timeoutRecordingFetcher struct {
 	durations []time.Duration
 }
 
+type cancelAwareFetcher struct {
+	pollStarted chan struct{}
+}
+
 type erroringFetcher struct {
 	err    error
 	pollCh chan struct{}
@@ -764,6 +768,17 @@ func (f *timeoutRecordingFetcher) Poll(ctx context.Context, limit int) ([]contro
 	defer f.mu.Unlock()
 	f.callCount++
 	f.durations = append(f.durations, time.Since(start))
+	return nil, "", ctx.Err()
+}
+
+func (f *cancelAwareFetcher) Poll(ctx context.Context, limit int) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
+	if f.pollStarted != nil {
+		select {
+		case f.pollStarted <- struct{}{}:
+		default:
+		}
+	}
+	<-ctx.Done()
 	return nil, "", ctx.Err()
 }
 
@@ -864,5 +879,45 @@ func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 		if duration > pollTimeout*2 {
 			t.Fatalf("call %d exceeded expected timeout, got %v", i, duration)
 		}
+	}
+}
+
+func TestPollerStopsWithoutBackoffOnCancel(t *testing.T) {
+	queue := &chanQueue{ch: make(chan controlplane.PolledCommand, 1)}
+	fetcher := &cancelAwareFetcher{pollStarted: make(chan struct{}, 1)}
+	var output strings.Builder
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	reader := sdkmetric.NewManualReader()
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer func() {
+		_ = meterProvider.Shutdown(context.Background())
+	}()
+
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 5*time.Second, 10*time.Second)
+	if err != nil {
+		t.Fatalf("new poller: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		poller.Run(ctx)
+	}()
+
+	select {
+	case <-fetcher.pollStarted:
+	case <-time.After(time.Second):
+		t.Fatal("poll was not invoked")
+	}
+	cancel()
+	wg.Wait()
+
+	if strings.Contains(output.String(), "poll failed; backing off") {
+		t.Fatalf("expected no backoff log on cancel, got %q", output.String())
+	}
+	if strings.Contains(output.String(), "poll timed out; backing off") {
+		t.Fatalf("expected no timeout backoff log on cancel, got %q", output.String())
 	}
 }

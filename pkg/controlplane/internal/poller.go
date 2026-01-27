@@ -134,6 +134,9 @@ func (p *poller) Run(ctx context.Context) {
 		cancel()
 		p.metrics.pollLatency.Record(ctx, time.Since(pollStart).Seconds(), metric.WithAttributes(attribute.Bool("error", err != nil)))
 		if err != nil {
+			if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+				return
+			}
 			p.hadPollError = true
 			p.metrics.pollErrors.Add(ctx, 1, metric.WithAttributes(attribute.String(attributeKeyErrorKind, pollErrorKind(err))))
 			delay := p.backoff.Duration()
