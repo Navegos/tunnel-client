@@ -207,6 +207,40 @@ func TestMockMCPServerStdio(t *testing.T) {
 	}
 }
 
+func TestMockMCPServerWWWAuthenticateProbe(t *testing.T) {
+	t.Parallel()
+
+	server := NewMockMCPServer(
+		WithWWWAuthenticateProbe(),
+		WithOAuthDiscoveryResources(),
+	)
+	server.Start(t)
+
+	baseURL := server.BaseURL()
+	if baseURL == nil {
+		t.Fatal("mock MCP server did not expose a base URL")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, baseURL.String(), http.NoBody)
+	if err != nil {
+		t.Fatalf("build probe request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("probe request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for probe, got %d", resp.StatusCode)
+	}
+	header := resp.Header.Get("WWW-Authenticate")
+	if header == "" || !strings.Contains(header, "resource_metadata") {
+		t.Fatalf("missing resource_metadata in WWW-Authenticate header: %q", header)
+	}
+}
+
 func TestMockMCPServerOAuthMetadata(t *testing.T) {
 	t.Parallel()
 

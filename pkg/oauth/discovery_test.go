@@ -14,20 +14,19 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"go.openai.org/api/tunnel-client/pkg/config"
 )
 
 func TestFetchOAuthMetadataFallsBackToRoot(t *testing.T) {
 	t.Parallel()
 
+	var expectedResource string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/oauth-protected-resource/base":
 			http.NotFound(w, r)
 		case "/.well-known/oauth-protected-resource":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, r.Host)
+			_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, expectedResource)
 		default:
 			http.Error(w, "unexpected path", http.StatusInternalServerError)
 		}
@@ -36,31 +35,28 @@ func TestFetchOAuthMetadataFallsBackToRoot(t *testing.T) {
 
 	baseURL, err := url.Parse(server.URL + "/base")
 	require.NoError(t, err)
-
-	cfg := &config.MCPConfig{ServerURL: baseURL}
-	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
-	urls := cfg.OAuthResourceMetadataURLs
+	expectedResource = baseURL.String()
 
 	client := server.Client()
 	client.Timeout = 2 * time.Second
 
-	resp, sourceURL, fetchErr := FetchOAuthMetadata(
+	resp, sourceURL, _, fetchErr := FetchOAuthMetadata(
 		context.Background(),
 		client,
-		urls,
+		buildWellKnownCandidates(baseURL),
 		slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError})),
 	)
 	require.NoError(t, fetchErr)
 	require.NotNil(t, sourceURL)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.Equal(t, "application/json", resp.Headers().Get("Content-Type"))
-	require.JSONEq(t, fmt.Sprintf(`{"resource":"%s"}`, baseURL.Host), string(resp.Payload()))
+	require.JSONEq(t, fmt.Sprintf(`{"resource":"%s"}`, expectedResource), string(resp.Payload()))
 }
 
 func TestFetchOAuthMetadataNoURLs(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := FetchOAuthMetadata(context.Background(), &http.Client{Timeout: time.Second}, nil, nil)
+	_, _, _, err := FetchOAuthMetadata(context.Background(), &http.Client{Timeout: time.Second}, nil, nil)
 	require.Error(t, err)
 }
 
@@ -68,6 +64,7 @@ func TestFetchOAuthMetadataRetriesOn5xxThenSucceeds(t *testing.T) {
 	t.Parallel()
 
 	var baseCalls, rootCalls int
+	var expectedResource string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/oauth-protected-resource/base":
@@ -77,7 +74,7 @@ func TestFetchOAuthMetadataRetriesOn5xxThenSucceeds(t *testing.T) {
 		case "/.well-known/oauth-protected-resource":
 			rootCalls++
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, r.Host)
+			_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, expectedResource)
 		default:
 			http.Error(w, "unexpected path", http.StatusInternalServerError)
 		}
@@ -86,14 +83,17 @@ func TestFetchOAuthMetadataRetriesOn5xxThenSucceeds(t *testing.T) {
 
 	baseURL, err := url.Parse(server.URL + "/base")
 	require.NoError(t, err)
-
-	cfg := &config.MCPConfig{ServerURL: baseURL}
-	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
+	expectedResource = baseURL.String()
 
 	client := server.Client()
 	client.Timeout = 2 * time.Second
 
-	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, cfg.OAuthResourceMetadataURLs, nil)
+	resp, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		buildWellKnownCandidates(baseURL),
+		nil,
+	)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.EqualValues(t, 1, baseCalls)
@@ -108,17 +108,16 @@ func TestFetchOAuthMetadataAllFailuresReturnError(t *testing.T) {
 	}))
 	t.Cleanup(errorServer.Close)
 
-	closedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	closedServer.Close()
-
-	closedURL, err := url.Parse(closedServer.URL + "/.well-known/oauth-protected-resource")
-	require.NoError(t, err)
-	errorURL, err := url.Parse(errorServer.URL + "/.well-known/oauth-protected-resource")
-	require.NoError(t, err)
-
 	client := &http.Client{Timeout: time.Second}
 
-	_, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{closedURL, errorURL}, nil)
+	resourceURL, err := url.Parse(errorServer.URL + "/base")
+	require.NoError(t, err)
+	_, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		buildWellKnownCandidates(resourceURL),
+		nil,
+	)
 	require.Error(t, fetchErr)
 }
 
@@ -130,13 +129,17 @@ func TestFetchOAuthMetadataEmptyBodyIsError(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	u, err := url.Parse(server.URL + "/.well-known/oauth-protected-resource")
-	require.NoError(t, err)
-
 	client := server.Client()
 	client.Timeout = time.Second
 
-	_, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u}, nil)
+	resourceURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	_, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		buildWellKnownCandidates(resourceURL),
+		nil,
+	)
 	require.Error(t, fetchErr)
 	require.Contains(t, fetchErr.Error(), "empty body")
 }
@@ -145,6 +148,7 @@ func TestFetchOAuthMetadataFallsBackOn5xxEmptyBody(t *testing.T) {
 	t.Parallel()
 
 	var calls int
+	var expectedResource string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		switch calls {
@@ -153,20 +157,23 @@ func TestFetchOAuthMetadataFallsBackOn5xxEmptyBody(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		default:
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"resource":"https://example.com"}`))
+			_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, expectedResource)
 		}
 	}))
 	t.Cleanup(server.Close)
 
 	baseURL, err := url.Parse(server.URL + "/base")
 	require.NoError(t, err)
-	cfg := &config.MCPConfig{ServerURL: baseURL}
-	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
-
+	expectedResource = baseURL.String()
 	client := server.Client()
 	client.Timeout = 2 * time.Second
 
-	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, cfg.OAuthResourceMetadataURLs, nil)
+	resp, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		buildWellKnownCandidates(baseURL),
+		nil,
+	)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.GreaterOrEqual(t, calls, 2)
@@ -174,9 +181,6 @@ func TestFetchOAuthMetadataFallsBackOn5xxEmptyBody(t *testing.T) {
 
 func TestFetchOAuthMetadataReadErrorIsReturned(t *testing.T) {
 	t.Parallel()
-
-	u, err := url.Parse("https://example.com/.well-known/oauth-protected-resource")
-	require.NoError(t, err)
 
 	client := &http.Client{
 		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
@@ -194,7 +198,14 @@ func TestFetchOAuthMetadataReadErrorIsReturned(t *testing.T) {
 		Timeout: time.Second,
 	}
 
-	_, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u}, nil)
+	resourceURL, err := url.Parse("https://example.com")
+	require.NoError(t, err)
+	_, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		buildWellKnownCandidates(resourceURL),
+		nil,
+	)
 	require.Error(t, fetchErr)
 	require.Contains(t, fetchErr.Error(), "read failed")
 }
@@ -203,8 +214,6 @@ func TestFetchOAuthMetadataRetriesOnNetworkError(t *testing.T) {
 	t.Parallel()
 
 	u1, err := url.Parse("https://example.com/.well-known/oauth-protected-resource/base")
-	require.NoError(t, err)
-	u2, err := url.Parse("https://example.com/.well-known/oauth-protected-resource")
 	require.NoError(t, err)
 
 	var calls int
@@ -227,27 +236,23 @@ func TestFetchOAuthMetadataRetriesOnNetworkError(t *testing.T) {
 		Timeout: time.Second,
 	}
 
-	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u1, nil, u2}, nil)
+	resourceURL, err := url.Parse("https://example.com/base")
+	require.NoError(t, err)
+	resp, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		buildWellKnownCandidates(resourceURL),
+		nil,
+	)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.GreaterOrEqual(t, calls, 2)
-}
-
-func TestFetchOAuthMetadataReturnsNoResponsesWhenAllCandidatesNil(t *testing.T) {
-	t.Parallel()
-
-	client := &http.Client{Timeout: time.Second}
-	_, _, err := FetchOAuthMetadata(context.Background(), client, []*url.URL{nil, nil}, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "no responses")
 }
 
 func TestFetchOAuthMetadataRetriesOnNetworkErrorWithLogger(t *testing.T) {
 	t.Parallel()
 
 	u1, err := url.Parse("https://example.com/.well-known/oauth-protected-resource/base")
-	require.NoError(t, err)
-	u2, err := url.Parse("https://example.com/.well-known/oauth-protected-resource")
 	require.NoError(t, err)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -269,7 +274,14 @@ func TestFetchOAuthMetadataRetriesOnNetworkErrorWithLogger(t *testing.T) {
 		Timeout: time.Second,
 	}
 
-	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u1, u2}, logger)
+	resourceURL, err := url.Parse("https://example.com/base")
+	require.NoError(t, err)
+	resp, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		buildWellKnownCandidates(resourceURL),
+		logger,
+	)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.GreaterOrEqual(t, calls, 2)
@@ -279,8 +291,6 @@ func TestFetchOAuthMetadataRetriesOn5xxReadErrorThenSucceeds(t *testing.T) {
 	t.Parallel()
 
 	u1, err := url.Parse("https://example.com/.well-known/oauth-protected-resource/base")
-	require.NoError(t, err)
-	u2, err := url.Parse("https://example.com/.well-known/oauth-protected-resource")
 	require.NoError(t, err)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -307,10 +317,59 @@ func TestFetchOAuthMetadataRetriesOn5xxReadErrorThenSucceeds(t *testing.T) {
 		Timeout: time.Second,
 	}
 
-	resp, _, fetchErr := FetchOAuthMetadata(context.Background(), client, []*url.URL{u1, u2}, logger)
+	resourceURL, err := url.Parse("https://example.com/base")
+	require.NoError(t, err)
+	resp, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		buildWellKnownCandidates(resourceURL),
+		logger,
+	)
 	require.NoError(t, fetchErr)
 	require.Equal(t, http.StatusOK, resp.ResponseCode())
 	require.GreaterOrEqual(t, calls, 2)
+}
+
+func TestFetchOAuthMetadataAttemptsCapture(t *testing.T) {
+	t.Parallel()
+
+	var expectedResource string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-protected-resource/base":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, expectedResource)
+		case "/.well-known/oauth-protected-resource":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"resource":"%s"}`, expectedResource)
+		default:
+			http.Error(w, "unexpected path", http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	baseURL, err := url.Parse(server.URL + "/base")
+	require.NoError(t, err)
+	expectedResource = baseURL.String()
+
+	client := server.Client()
+	client.Timeout = 2 * time.Second
+
+	resp, _, attempts, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		buildWellKnownCandidates(baseURL),
+		nil,
+	)
+	require.NoError(t, fetchErr)
+	require.Equal(t, http.StatusOK, resp.ResponseCode())
+	require.Len(t, attempts, 2)
+	require.True(t, attempts[0].Tried)
+	require.True(t, attempts[0].Selected)
+	require.Equal(t, DiscoverySourceWellKnownPath, attempts[0].Source)
+	require.False(t, attempts[1].Tried)
+	require.False(t, attempts[1].Selected)
+	require.Equal(t, DiscoverySourceWellKnownRoot, attempts[1].Source)
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

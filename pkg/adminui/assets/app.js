@@ -50,6 +50,11 @@
     return parts.join(" ");
   }
 
+  const adminUI = (window.adminUI = window.adminUI || {});
+  adminUI.$ = $;
+  adminUI.fetchJSON = fetchJSON;
+  adminUI.fmtUptime = fmtUptime;
+
   function copy(text) {
     if (!text) return;
     if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
@@ -89,67 +94,6 @@
     });
   }
 
-  function renderOAuthDiscoveryUrls(urls) {
-    const list = $("oauthDiscoveryUrls");
-    list.textContent = "";
-    if (!urls || urls.length === 0) {
-      list.textContent = "—";
-      return;
-    }
-    urls.forEach((url, idx) => {
-      const div = document.createElement("div");
-      div.textContent = `${idx + 1}. ${url}`;
-      list.appendChild(div);
-    });
-  }
-
-  function fmtTimestamp(ts) {
-    if (!ts) return "—";
-    const d = new Date(ts);
-    if (Number.isNaN(d.getTime())) return ts;
-    const ageSec = Math.floor((Date.now() - d.getTime()) / 1000);
-    return d.toISOString() + " (" + fmtUptime(ageSec) + " ago)";
-  }
-
-  function renderOAuthMetadata(meta, err, pending) {
-    const statusEl = $("oauthStatus");
-    if (err) {
-      statusEl.textContent = "error";
-    } else if (pending) {
-      statusEl.textContent = "pending";
-    } else if (meta) {
-      statusEl.textContent = meta.status_code || "—";
-    } else {
-      statusEl.textContent = "—";
-    }
-    $("oauthFetchedAt").textContent = meta
-      ? fmtTimestamp(meta.fetched_at)
-      : "—";
-    $("oauthSourceUrl").textContent = meta ? meta.url || "—" : "—";
-
-    if (err) {
-      $("oauthHeaders").textContent = "";
-      $("oauthBody").textContent = "";
-      return;
-    }
-
-    const headers = meta && meta.headers ? meta.headers : null;
-    $("oauthHeaders").textContent = headers
-      ? JSON.stringify(headers, null, 2)
-      : "";
-
-    if (meta) {
-      if (meta.body) {
-        $("oauthBody").textContent = JSON.stringify(meta.body, null, 2);
-      } else if (meta.body_text) {
-        $("oauthBody").textContent = meta.body_text;
-      } else {
-        $("oauthBody").textContent = "";
-      }
-    } else {
-      $("oauthBody").textContent = "";
-    }
-  }
 
   async function refreshStatus() {
     try {
@@ -179,24 +123,6 @@
   $("copyTunnelId").addEventListener("click", () =>
     copy($("vTunnelId").textContent)
   );
-
-  // ---- OAuth ----
-  async function refreshOAuth() {
-    $("oauthErr").textContent = "";
-    try {
-      const o = await fetchJSON("/api/oauth");
-      renderOAuthDiscoveryUrls(o.discovery_urls);
-      renderOAuthMetadata(o.metadata, o.error, o.pending);
-      if (o.error) {
-        $("oauthErr").textContent = o.error;
-      }
-    } catch (e) {
-      $("oauthErr").textContent = "error: " + e;
-      renderOAuthMetadata(null, e, false);
-    }
-  }
-
-  $("refreshOAuth").addEventListener("click", refreshOAuth);
 
   // ---- Metrics ----
   function parseMetrics(text) {
@@ -540,15 +466,29 @@
     }
   }
 
-  (async function main() {
+  async function main() {
     await refreshHealth();
     await refreshStatus();
     await refreshMetrics();
-    await refreshOAuth();
+    if (window.adminUI && window.adminUI.oauth && window.adminUI.oauth.refresh) {
+      await window.adminUI.oauth.refresh();
+    }
     await startLogs();
 
     setInterval(refreshHealth, 5000);
     setInterval(refreshStatus, 10000);
-    setInterval(refreshOAuth, 15000);
-  })();
+    setInterval(() => {
+      if (window.adminUI && window.adminUI.oauth && window.adminUI.oauth.refresh) {
+        window.adminUI.oauth.refresh();
+      }
+    }, 15000);
+  }
+
+  if (document.readyState === "loading") {
+    window.addEventListener("load", () => {
+      main();
+    });
+  } else {
+    main();
+  }
 })();

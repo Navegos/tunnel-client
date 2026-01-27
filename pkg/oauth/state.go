@@ -10,25 +10,28 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
-// DefaultDiscoveryTimeout bounds how long we wait for OAuth metadata discovery.
+// DefaultDiscoveryTimeout bounds how long we wait for OAuth ProtectedResourceMetaData discovery.
 const DefaultDiscoveryTimeout = 5 * time.Second
 
-// DiscoveryResult captures OAuth metadata returned by the MCP server.
+// DiscoveryResult captures OAuth ProtectedResourceMetaData returned by the MCP server.
 type DiscoveryResult struct {
-	URL        string          `json:"url,omitempty"`
-	FetchedAt  time.Time       `json:"fetched_at,omitempty"`
-	StatusCode int             `json:"status_code,omitempty"`
-	Headers    http.Header     `json:"headers,omitempty"`
-	Body       json.RawMessage `json:"body,omitempty"`
-	BodyText   string          `json:"body_text,omitempty"`
+	URL        string             `json:"url,omitempty"`
+	FetchedAt  time.Time          `json:"fetched_at,omitempty"`
+	StatusCode int                `json:"status_code,omitempty"`
+	Headers    http.Header        `json:"headers,omitempty"`
+	Body       json.RawMessage    `json:"body,omitempty"`
+	BodyText   string             `json:"body_text,omitempty"`
+	Attempts   []DiscoveryAttempt `json:"attempts,omitempty"`
 }
 
-// DiscoveryState tracks the result of a background OAuth metadata fetch.
+// DiscoveryState tracks the result of a background OAuth ProtectedResourceMetaData fetch.
 type DiscoveryState struct {
 	done   chan struct{}
 	mu     sync.Mutex
 	result *DiscoveryResult
 	err    error
+	probe  *WWWAuthenticateProbeStatus
+	urls   []string
 	once   sync.Once
 }
 
@@ -38,7 +41,12 @@ func NewDiscoveryState() *DiscoveryState {
 }
 
 // Set records the OAuth discovery result and signals waiters.
-func (s *DiscoveryState) Set(result *DiscoveryResult, err error) {
+func (s *DiscoveryState) Set(
+	result *DiscoveryResult,
+	err error,
+	probe *WWWAuthenticateProbeStatus,
+	urls []string,
+) {
 	if s == nil {
 		return
 	}
@@ -47,14 +55,23 @@ func (s *DiscoveryState) Set(result *DiscoveryResult, err error) {
 		defer s.mu.Unlock()
 		s.result = result
 		s.err = err
+		if probe != nil {
+			probeCopy := *probe
+			s.probe = &probeCopy
+		}
+		if len(urls) > 0 {
+			s.urls = append([]string{}, urls...)
+		}
 		close(s.done)
 	})
 }
 
-// Wait blocks until the OAuth metadata is available or the timeout elapses.
-func (s *DiscoveryState) Wait(timeout time.Duration) (*DiscoveryResult, error, bool) {
+// Wait blocks until the OAuth ProtectedResourceMetaData is available or the timeout elapses.
+func (s *DiscoveryState) Wait(
+	timeout time.Duration,
+) (*DiscoveryResult, *WWWAuthenticateProbeStatus, []string, error, bool) {
 	if s == nil {
-		return nil, nil, false
+		return nil, nil, nil, nil, false
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -62,23 +79,39 @@ func (s *DiscoveryState) Wait(timeout time.Duration) (*DiscoveryResult, error, b
 	case <-s.done:
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.result, s.err, true
+		urlsCopy := append([]string{}, s.urls...)
+		var probeCopy *WWWAuthenticateProbeStatus
+		if s.probe != nil {
+			copyVal := *s.probe
+			probeCopy = &copyVal
+		}
+		return s.result, probeCopy, urlsCopy, s.err, true
 	case <-timer.C:
-		return nil, nil, false
+		return nil, nil, nil, nil, false
 	}
 }
 
 // BuildDiscoveryResult converts the tunnel response into a UI-friendly payload.
-func BuildDiscoveryResult(resp *types.TunnelResponse, sourceURL *url.URL, fetchedAt time.Time) *DiscoveryResult {
-	if resp == nil {
+func BuildDiscoveryResult(
+	resp *types.TunnelResponse,
+	sourceURL *url.URL,
+	fetchedAt time.Time,
+	attempts []DiscoveryAttempt,
+) *DiscoveryResult {
+	if resp == nil && len(attempts) == 0 {
 		return nil
 	}
 
 	result := &DiscoveryResult{
-		FetchedAt:  fetchedAt,
-		StatusCode: resp.ResponseCode(),
-		Headers:    resp.Headers(),
+		Attempts: attempts,
 	}
+	if resp == nil {
+		return result
+	}
+
+	result.FetchedAt = fetchedAt
+	result.StatusCode = resp.ResponseCode()
+	result.Headers = resp.Headers()
 	if sourceURL != nil {
 		result.URL = sourceURL.String()
 	}

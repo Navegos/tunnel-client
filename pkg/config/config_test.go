@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,10 +84,6 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	}
 	if cfg.MCP.MaxConcurrentRequests != 12 {
 		t.Fatalf("unexpected MCP max concurrent requests: %d", cfg.MCP.MaxConcurrentRequests)
-	}
-	expectMetadata := []string{"https://mcp.example/.well-known/oauth-protected-resource"}
-	if got := metadataURLsToStrings(cfg.MCP.OAuthResourceMetadataURLs); !equalStringSlices(got, expectMetadata) {
-		t.Fatalf("unexpected MCP resource metadata URLs: %v", got)
 	}
 }
 
@@ -174,59 +169,6 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 	}
 	if cfg.MCP.MaxConcurrentRequests != 20 {
 		t.Fatalf("expected MCP max concurrent requests 20, got %d", cfg.MCP.MaxConcurrentRequests)
-	}
-	expectMetadata := []string{"https://flag-mcp/.well-known/oauth-protected-resource"}
-	if got := metadataURLsToStrings(cfg.MCP.OAuthResourceMetadataURLs); !equalStringSlices(got, expectMetadata) {
-		t.Fatalf("unexpected MCP resource metadata URLs: %v", got)
-	}
-}
-
-func TestBuildResourceMetadataURLs(t *testing.T) {
-	t.Parallel()
-
-	testCases := []struct {
-		name string
-		raw  string
-		want []string
-	}{
-		{
-			name: "path-specific",
-			raw:  "https://example.com/public/mcp",
-			want: []string{
-				"https://example.com/.well-known/oauth-protected-resource/public/mcp",
-				"https://example.com/.well-known/oauth-protected-resource",
-			},
-		},
-		{
-			name: "root-only",
-			raw:  "https://example.com/",
-			want: []string{"https://example.com/.well-known/oauth-protected-resource"},
-		},
-		{
-			name: "trailing-slash-path",
-			raw:  "https://example.com/public/mcp/",
-			want: []string{
-				"https://example.com/.well-known/oauth-protected-resource/public/mcp",
-				"https://example.com/.well-known/oauth-protected-resource",
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			serverURL, err := parseURL(tc.raw)
-			if err != nil {
-				t.Fatalf("parseURL(%q) returned error: %v", tc.raw, err)
-			}
-
-			got := metadataURLsToStrings(buildResourceMetadataURLs(serverURL))
-			if !equalStringSlices(got, tc.want) {
-				t.Fatalf("buildResourceMetadataURLs(%q) = %v, want %v", tc.raw, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -569,9 +511,6 @@ func TestLoadUsesMCPCommand(t *testing.T) {
 	if got := cfg.MCP.CommandArgs; len(got) != 2 || got[0] != "echo" || got[1] != "hello world" {
 		t.Fatalf("unexpected MCP command args: %v", got)
 	}
-	if len(cfg.MCP.OAuthResourceMetadataURLs) != 0 {
-		t.Fatalf("expected no OAuth metadata URLs for stdio transport")
-	}
 }
 
 func TestLoadRejectsMCPCommandAndServerURL(t *testing.T) {
@@ -908,17 +847,6 @@ func TestBuildControlPlaneExtraHeadersFromFlags(t *testing.T) {
 	if headers["X-Trace-Id"] != "abc123" {
 		t.Fatalf("expected X-Trace-Id=abc123, got %q", headers["X-Trace-Id"])
 	}
-}
-
-func metadataURLsToStrings(urls []*url.URL) []string {
-	out := make([]string, 0, len(urls))
-	for _, u := range urls {
-		if u == nil {
-			continue
-		}
-		out = append(out, u.String())
-	}
-	return out
 }
 
 func equalStringSlices(a, b []string) bool {

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -38,16 +37,15 @@ const (
 )
 
 const (
-	defaultControlPlaneBaseURL                    = "https://api.openai.com"
-	defaultControlPlaneMaxInFlight                = 20
-	maxControlPlaneMaxInFlight                    = 10000
-	defaultControlPlanePollTimeout                = 30 * time.Second
-	defaultLogLevel                               = "info"
-	defaultLogFormat                    LogFormat = LogFormatUnset
-	defaultHealthListenAddr                       = ":8080"
-	defaultMCPConnectionMaxTTL                    = 10 * time.Minute
-	defaultMCPMaxConcurrentRequests               = 10
-	wellKnownOAuthProtectedResourcePath           = "/.well-known/oauth-protected-resource"
+	defaultControlPlaneBaseURL                = "https://api.openai.com"
+	defaultControlPlaneMaxInFlight            = 20
+	maxControlPlaneMaxInFlight                = 10000
+	defaultControlPlanePollTimeout            = 30 * time.Second
+	defaultLogLevel                           = "info"
+	defaultLogFormat                LogFormat = LogFormatUnset
+	defaultHealthListenAddr                   = ":8080"
+	defaultMCPConnectionMaxTTL                = 10 * time.Minute
+	defaultMCPMaxConcurrentRequests           = 10
 )
 
 const _ = uint(maxControlPlaneMaxInFlight - defaultControlPlaneMaxInFlight)
@@ -125,25 +123,6 @@ type MCPConfig struct {
 	TransportKind         MCPTransportKind
 	ConnectionMaxTTL      time.Duration
 	MaxConcurrentRequests int
-	// OAuthResourceMetadataURLs lists candidate OAuth protected resource metadata
-	// endpoints derived from ServerURL following RFC 9728 discovery rules.
-	OAuthResourceMetadataURLs []*url.URL
-}
-
-// BootstrapOAuthResourceMetadataURLs populates OAuthResourceMetadataURLs using
-// the configured ServerURL when the slice is empty.
-func (c *MCPConfig) BootstrapOAuthResourceMetadataURLs() error {
-	if c == nil {
-		return errors.New("mcp config: nil receiver")
-	}
-	if len(c.OAuthResourceMetadataURLs) > 0 {
-		return nil
-	}
-	if c.ServerURL == nil {
-		return errors.New("mcp config: server URL is required to derive oauth metadata URLs")
-	}
-	c.OAuthResourceMetadataURLs = buildResourceMetadataURLs(c.ServerURL)
-	return nil
 }
 
 // Load builds a Config by combining CLI flag arguments with environment variables.
@@ -735,19 +714,13 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (M
 		maxConcurrent = val
 	}
 
-	var metadataURLs []*url.URL
-	if transportKind == MCPTransportHTTPStreamable && serverURL != nil {
-		metadataURLs = buildResourceMetadataURLs(serverURL)
-	}
-
 	return MCPConfig{
-		ServerURL:                 serverURL,
-		Command:                   commandRaw,
-		CommandArgs:               commandArgs,
-		TransportKind:             transportKind,
-		ConnectionMaxTTL:          ttl,
-		MaxConcurrentRequests:     maxConcurrent,
-		OAuthResourceMetadataURLs: metadataURLs,
+		ServerURL:             serverURL,
+		Command:               commandRaw,
+		CommandArgs:           commandArgs,
+		TransportKind:         transportKind,
+		ConnectionMaxTTL:      ttl,
+		MaxConcurrentRequests: maxConcurrent,
 	}, nil
 }
 
@@ -873,29 +846,4 @@ func parseURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("must include scheme and host")
 	}
 	return parsed, nil
-}
-
-// buildResourceMetadataURLs constructs the ordered list of candidate OAuth
-// protected resource metadata endpoints derived from the MCP server URL. It
-// follows RFC 9728 discovery rules by prioritizing the path-specific well-known
-// URI, then the root well-known URI.
-func buildResourceMetadataURLs(serverURL *url.URL) []*url.URL {
-	base := &url.URL{
-		Scheme: serverURL.Scheme,
-		Host:   serverURL.Host,
-		Path:   wellKnownOAuthProtectedResourcePath,
-	}
-
-	urls := make([]*url.URL, 0, 2)
-
-	pathSuffix := strings.Trim(serverURL.EscapedPath(), "/")
-	if pathSuffix != "" {
-		withPath := *base
-		withPath.Path = path.Join(base.Path, pathSuffix)
-		urls = append(urls, &withPath)
-	}
-
-	urls = append(urls, base)
-
-	return urls
 }

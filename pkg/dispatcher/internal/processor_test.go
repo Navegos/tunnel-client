@@ -1098,14 +1098,14 @@ func TestNewProcessorValidationErrors(t *testing.T) {
 			params: processorParams{Logger: logger, Transport: transport, TunnelResponder: responder, MCPConfig: validMCP, OAuthHTTPClient: nil, ControlPlaneCfg: validControlPlane, MeterProvider: meterProvider},
 		},
 		{
-			name: "missing_oauth_metadata_urls",
+			name: "missing_mcp_server_url",
 			params: processorParams{
 				Logger:          logger,
 				Transport:       transport,
 				TunnelResponder: responder,
 				MCPConfig: func() *config.MCPConfig {
 					cfg := *validMCP
-					cfg.OAuthResourceMetadataURLs = nil
+					cfg.ServerURL = nil
 					return &cfg
 				}(),
 				OAuthHTTPClient: validOAuthClient,
@@ -1719,22 +1719,22 @@ func TestProcessorErrorResponsePostFailureIsReturned(t *testing.T) {
 func TestProcessorOAuthDiscoveryPostFailureIsReturned(t *testing.T) {
 	t.Parallel()
 
+	var expectedResource string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"resource":"https://example.com","scopes_supported":["read"]}`))
+		_, _ = fmt.Fprintf(w, `{"resource":"%s","scopes_supported":["read"]}`, expectedResource)
 	}))
 	t.Cleanup(server.Close)
 
 	serverURL, err := url.Parse(server.URL)
 	require.NoError(t, err)
+	expectedResource = serverURL.String()
 
 	cfg := &config.MCPConfig{
 		ServerURL:             serverURL,
 		ConnectionMaxTTL:      time.Second,
 		MaxConcurrentRequests: 1,
 	}
-	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
-
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	responder := &failingResponder{err: context.Canceled}
 	transport := &stubForwardingTransport{conn: &stubForwardingConnection{}}
@@ -1797,14 +1797,16 @@ func TestProcessorRequiresShardToken(t *testing.T) {
 func TestProcessorHandlesOAuthDiscoveryCommand(t *testing.T) {
 	t.Parallel()
 
+	var expectedResource string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"resource":"https://example.com","scopes_supported":["read"]}`))
+		_, _ = fmt.Fprintf(w, `{"resource":"%s","scopes_supported":["read"]}`, expectedResource)
 	}))
 	t.Cleanup(server.Close)
 
 	serverURL, err := url.Parse(server.URL)
 	require.NoError(t, err)
+	expectedResource = serverURL.String()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	responder := newRecordingResponder()
@@ -1816,8 +1818,6 @@ func TestProcessorHandlesOAuthDiscoveryCommand(t *testing.T) {
 		ConnectionMaxTTL:      2 * time.Second,
 		MaxConcurrentRequests: 1,
 	}
-	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
-
 	processor, err := NewProcessor(processorParams{
 		Logger:          logger,
 		Transport:       transport,
@@ -2028,7 +2028,6 @@ func newTestMCPConfig(t *testing.T, ttl time.Duration) *config.MCPConfig {
 		ConnectionMaxTTL:      ttl,
 		MaxConcurrentRequests: 2,
 	}
-	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
 	return cfg
 }
 

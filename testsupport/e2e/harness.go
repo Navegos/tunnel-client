@@ -299,9 +299,6 @@ func (h *Harness) startClient(t testing.TB) {
 			return
 		}
 		cfg.MCP.ServerURL = mcpURL
-		if err := cfg.MCP.BootstrapOAuthResourceMetadataURLs(); err != nil {
-			t.Fatalf("bootstrap MCP OAuth metadata URLs: %v", err)
-		}
 	case config.MCPTransportInMemory, config.MCPTransportStdio:
 		if transportKind == config.MCPTransportInMemory && h.inMemoryMCP == nil {
 			t.Fatalf("mock MCP in-memory transport must be started before the client")

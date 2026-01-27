@@ -13,6 +13,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/app"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
+	"go.openai.org/api/tunnel-client/pkg/oauth"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
 
@@ -49,7 +50,7 @@ func (l *tunnelEventLogger) LogEvent(event fxevent.Event) {
 		oauthDiscoveryURLs := make([]string, 0)
 		if l.mcpConfig != nil {
 			priority := 1
-			for _, metadataURL := range l.mcpConfig.OAuthResourceMetadataURLs {
+			for _, metadataURL := range oauth.BuildResourceMetadataURLs(l.mcpConfig.ServerURL) {
 				if metadataURL == nil {
 					continue
 				}

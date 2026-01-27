@@ -51,7 +51,6 @@ func TestAppBoots(t *testing.T) {
 			MaxConcurrentRequests: 10,
 		},
 	}
-	require.NoError(t, cfg.MCP.BootstrapOAuthResourceMetadataURLs())
 
 	var svc health.Service
 	stopped := false

@@ -78,7 +78,7 @@ func WithKeepalivePings() Option {
 	}
 }
 
-// WithOAuthDiscoveryResources enables the well-known OAuth protected resource metadata endpoint.
+// WithOAuthDiscoveryResources enables the well-known OAuth ProtectedResourceMetaData endpoint.
 func WithOAuthDiscoveryResources() Option {
 	return func(m *MockMCPServer) {
 		m.enableOAuth = true
@@ -94,6 +94,14 @@ func WithOAuthProtection() Option {
 		if m.apiKeys == nil {
 			m.apiKeys = defaultAPIKeys()
 		}
+	}
+}
+
+// WithWWWAuthenticateProbe enables a 401 response with WWW-Authenticate header for empty POST probes.
+func WithWWWAuthenticateProbe() Option {
+	return func(m *MockMCPServer) {
+		m.enableOAuth = true
+		m.wwwAuthProbe = true
 	}
 }
 
@@ -124,6 +132,8 @@ type MockMCPServer struct {
 
 	enableOAuth  bool
 	protectOAuth bool
+	wwwAuthProbe bool
+	wwwAuthURL   string
 	apiKeys      map[string]*APIKey
 
 	injectKeepalivePings bool
@@ -166,18 +176,34 @@ func (m *MockMCPServer) Start(t testing.TB) {
 
 	streamableHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, nil)
 	var protectedHandler http.Handler = streamableHandler
+	metadataURL := fmt.Sprintf("http://%s%s", listener.Addr().String(), wellKnownOAuthProtectedResourcePath)
 	if m.protectOAuth {
-		metadataURL := fmt.Sprintf("http://%s%s", listener.Addr().String(), wellKnownOAuthProtectedResourcePath)
 		protectedHandler = auth.RequireBearerToken(m.tokenVerifier(), &auth.RequireBearerTokenOptions{
 			Scopes:              []string{"read", "write"},
 			ResourceMetadataURL: metadataURL,
 		})(streamableHandler)
+	}
+	if m.wwwAuthProbe {
+		m.wwwAuthURL = metadataURL
 	}
 
 	httpHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if m.enableOAuth && req.URL.Path == wellKnownOAuthProtectedResourcePath {
 			m.serveProtectedResourceMetadata(w, req)
 			return
+		}
+		if m.wwwAuthProbe && req.Method == http.MethodPost && req.Header.Get("Authorization") == "" {
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				m.failf("mock MCP server read body: %v", err)
+			}
+			_ = req.Body.Close()
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			if len(body) == 0 && m.wwwAuthURL != "" {
+				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s"`, m.wwwAuthURL))
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 		}
 		if req.Method == http.MethodPost {
 			body, err := io.ReadAll(req.Body)

@@ -55,16 +55,16 @@ func startOAuthDiscovery(p discoveryParams) error {
 	if transportKind == "" {
 		transportKind = config.MCPTransportHTTPStreamable
 	}
-	urls := p.MCPConfig.OAuthResourceMetadataURLs
+	serverURL := p.MCPConfig.ServerURL
 
 	p.Lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			if transportKind != config.MCPTransportHTTPStreamable || len(urls) == 0 {
+			if transportKind != config.MCPTransportHTTPStreamable || serverURL == nil {
 				reason := fmt.Sprintf("oauth discovery disabled for transport %q", transportKind)
-				if len(urls) == 0 {
-					reason = "oauth discovery URLs are not configured"
+				if serverURL == nil {
+					reason = "oauth discovery server URL is not configured"
 				}
-				p.State.Set(nil, errors.New(reason))
+				p.State.Set(nil, errors.New(reason), nil, nil)
 				logger.DebugContext(ctx, reason)
 				return nil
 			}
@@ -74,15 +74,24 @@ func startOAuthDiscovery(p discoveryParams) error {
 				defer cancel()
 
 				start := time.Now()
-				resp, sourceURL, err := FetchOAuthMetadata(fetchCtx, p.HTTPClient, urls, logger)
-				if err != nil {
-					p.State.Set(nil, err)
-					logger.WarnContext(fetchCtx, "oauth discovery failed", slog.String("error", err.Error()))
+				candidates, probe := BuildOAuthDiscoveryCandidates(fetchCtx, p.HTTPClient, serverURL, logger)
+				candidateStrings := candidatesToStrings(candidates)
+				if len(candidates) == 0 {
+					err := errors.New("oauth discovery metadata URLs are not configured")
+					p.State.Set(nil, err, probe, candidateStrings)
+					logger.WarnContext(fetchCtx, "OAuth discovery disabled", slog.String("error", err.Error()))
 					return
 				}
-				result := BuildDiscoveryResult(resp, sourceURL, start)
-				p.State.Set(result, nil)
-				logger.InfoContext(fetchCtx, "oauth discovery metadata fetched",
+
+				resp, sourceURL, attempts, err := FetchOAuthMetadata(fetchCtx, p.HTTPClient, candidates, logger)
+				result := BuildDiscoveryResult(resp, sourceURL, start, attempts)
+				if err != nil {
+					p.State.Set(result, err, probe, candidateStrings)
+					logger.WarnContext(fetchCtx, "OAuth discovery failed", slog.String("error", err.Error()))
+					return
+				}
+				p.State.Set(result, nil, probe, candidateStrings)
+				logger.InfoContext(fetchCtx, "OAuth discovery ProtectedResourceMetaData fetched",
 					slog.Int("status_code", resp.ResponseCode()),
 					slog.Duration("latency", time.Since(start)),
 				)

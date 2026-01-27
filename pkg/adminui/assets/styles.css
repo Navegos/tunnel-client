@@ -106,6 +106,45 @@ h1 {
 }
 
 .kv div { overflow-wrap: anywhere; }
+
+.oauth-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.oauth-table th,
+.oauth-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.oauth-table th {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.oauth-status {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.oauth-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  overflow-wrap: anywhere;
+}
+
+.oauth-url.selected {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.oauth-url.placeholder {
+  color: var(--muted);
+}
 a { color: inherit; }
 
 button, input, select, label { font: inherit; }

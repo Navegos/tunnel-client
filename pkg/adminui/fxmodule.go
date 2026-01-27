@@ -125,9 +125,10 @@ func buildStatus(p routeParams) statusResponse {
 	if p.MCPConfig != nil && p.MCPConfig.ServerURL != nil {
 		out.MCPServerURL = p.MCPConfig.ServerURL.String()
 	}
-	if p.MCPConfig != nil && len(p.MCPConfig.OAuthResourceMetadataURLs) > 0 {
-		out.MCPResourceMetadataURLs = make([]string, 0, len(p.MCPConfig.OAuthResourceMetadataURLs))
-		for _, url := range p.MCPConfig.OAuthResourceMetadataURLs {
+	if p.MCPConfig != nil {
+		urls := oauth.BuildResourceMetadataURLs(p.MCPConfig.ServerURL)
+		out.MCPResourceMetadataURLs = make([]string, 0, len(urls))
+		for _, url := range urls {
 			if url == nil {
 				continue
 			}

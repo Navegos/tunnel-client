@@ -273,7 +273,6 @@ func newTestMCPConfigQueue(t *testing.T, maxConcurrent int) *config.MCPConfig {
 		ConnectionMaxTTL:      time.Second,
 		MaxConcurrentRequests: maxConcurrent,
 	}
-	require.NoError(t, cfg.BootstrapOAuthResourceMetadataURLs())
 	return cfg
 }
 

@@ -109,14 +109,23 @@
         <div class="card span-6">
           <div class="row">
             <div>
-              <div class="muted small">OAuth discovery URLs</div>
-              <div class="small muted">Ordered list of discovery candidates</div>
+              <div class="muted small">OAuth discovery</div>
+              <div class="small muted">Ordered by discovery priority</div>
             </div>
             <span style="flex:1"></span>
             <button id="refreshOAuth">Refresh</button>
             <span id="oauthErr" class="muted small"></span>
           </div>
-          <div class="mono" id="oauthDiscoveryUrls" style="margin-top: 12px">—</div>
+          <table class="oauth-table" style="margin-top: 12px">
+            <thead>
+              <tr>
+                <th>Priority</th>
+                <th>Type</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="oauthDiscoveryRows"></tbody>
+          </table>
         </div>
         <div class="card span-6">
           <div class="muted small">OAuth metadata</div>
@@ -124,6 +133,7 @@
             <div class="muted">Status</div><div class="mono" id="oauthStatus">—</div>
             <div class="muted">Fetched at</div><div class="mono" id="oauthFetchedAt">—</div>
             <div class="muted">Source URL</div><div class="mono" id="oauthSourceUrl">—</div>
+            <div class="muted">Metadata source</div><div class="mono" id="oauthMetadataSource">—</div>
           </div>
           <details style="margin-top: 12px">
             <summary class="muted">Headers</summary>
@@ -170,5 +180,6 @@
     </section>
 
     <script src="/assets/app.js"></script>
+    <script src="/assets/oauth.js"></script>
   </body>
 </html>

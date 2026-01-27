@@ -48,14 +48,14 @@ type processorParams struct {
 }
 
 type mcpProcessor struct {
-	logger            *slog.Logger
-	transport         mcpclient.ForwardingTransport
-	tunnelResponder   controlplane.Responder
-	connectionMaxTTL  time.Duration
-	metrics           *processorMetrics
-	tunnelID          types.TunnelID
-	oauthHTTPClient   *http.Client
-	oauthMetadataURLs []*url.URL
+	logger           *slog.Logger
+	transport        mcpclient.ForwardingTransport
+	tunnelResponder  controlplane.Responder
+	connectionMaxTTL time.Duration
+	metrics          *processorMetrics
+	tunnelID         types.TunnelID
+	oauthHTTPClient  *http.Client
+	mcpServerURL     *url.URL
 }
 
 // NewProcessor constructs a Processor that uses the provided transport.
@@ -97,20 +97,19 @@ func NewProcessor(p processorParams) (Processor, error) {
 	if transportKind == "" {
 		transportKind = config.MCPTransportHTTPStreamable
 	}
-	metadataURLs := p.MCPConfig.OAuthResourceMetadataURLs
-	if len(metadataURLs) == 0 && transportKind == config.MCPTransportHTTPStreamable {
-		return nil, fmt.Errorf("dispatcher processor: missing OAuth resource metadata URLs")
+	if transportKind == config.MCPTransportHTTPStreamable && p.MCPConfig.ServerURL == nil {
+		return nil, fmt.Errorf("dispatcher processor: missing MCP server URL")
 	}
 
 	return &mcpProcessor{
-		logger:            baseLogger,
-		transport:         p.Transport,
-		tunnelResponder:   p.TunnelResponder,
-		connectionMaxTTL:  p.MCPConfig.ConnectionMaxTTL,
-		metrics:           processorMetrics,
-		tunnelID:          p.ControlPlaneCfg.TunnelID,
-		oauthHTTPClient:   p.OAuthHTTPClient,
-		oauthMetadataURLs: metadataURLs,
+		logger:           baseLogger,
+		transport:        p.Transport,
+		tunnelResponder:  p.TunnelResponder,
+		connectionMaxTTL: p.MCPConfig.ConnectionMaxTTL,
+		metrics:          processorMetrics,
+		tunnelID:         p.ControlPlaneCfg.TunnelID,
+		oauthHTTPClient:  p.OAuthHTTPClient,
+		mcpServerURL:     p.MCPConfig.ServerURL,
 	}, nil
 }
 
@@ -244,13 +243,18 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 }
 
 func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger *slog.Logger, cmd controlplane.OauthDiscoveryCommand) error {
-	if len(p.oauthMetadataURLs) == 0 {
-		return fmt.Errorf("dispatcher processor: missing oauth metadata URLs")
+	if p.mcpServerURL == nil {
+		return fmt.Errorf("dispatcher processor: missing MCP server URL")
 	}
 
-	resp, _, err := oauth.FetchOAuthMetadata(ctx, p.oauthHTTPClient, p.oauthMetadataURLs, logger)
+	candidates, _ := oauth.BuildOAuthDiscoveryCandidates(ctx, p.oauthHTTPClient, p.mcpServerURL, logger)
+	if len(candidates) == 0 {
+		return fmt.Errorf("dispatcher processor: missing OAuth metadata URLs")
+	}
+
+	resp, _, _, err := oauth.FetchOAuthMetadata(ctx, p.oauthHTTPClient, candidates, logger)
 	if err != nil {
-		logger.ErrorContext(ctx, "failed to fetch oauth discovery metadata", slog.String("error", err.Error()))
+		logger.ErrorContext(ctx, "failed to fetch OAuth discovery ProtectedResourceMetaData", slog.String("error", err.Error()))
 		return err
 	}
 
@@ -261,9 +265,9 @@ func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger 
 			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
 		}
 		if errors.Is(postErr, context.DeadlineExceeded) || errors.Is(postErr, context.Canceled) {
-			logger.WarnContext(ctx, "context canceled while posting oauth discovery response", attrs...)
+			logger.WarnContext(ctx, "context canceled while posting OAuth discovery response", attrs...)
 		} else {
-			logger.ErrorContext(ctx, "failed to post oauth discovery response to control plane", attrs...)
+			logger.ErrorContext(ctx, "failed to post OAuth discovery response to control plane", attrs...)
 		}
 		return postErr
 	}
@@ -274,7 +278,7 @@ func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger 
 	}
 	p.metrics.recordCommandLatencies(ctx, p.tunnelID, resp.ResponseCode(), metricAttrs, cmd.EnqueuedAt(), cmd.PolledAt(), latencyRecorded)
 
-	logger.InfoContext(ctx, "dispatcher delivered oauth discovery response to control plane",
+	logger.InfoContext(ctx, "dispatcher delivered OAuth discovery response to control plane",
 		slog.Int("status_code", resp.ResponseCode()))
 	return nil
 }
