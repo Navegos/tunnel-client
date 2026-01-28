@@ -41,6 +41,7 @@ const (
 	ComponentControlPlane = "controlplane"
 	ComponentMcpClient    = "mcpclient"
 	ComponentProcess      = "process"
+	ComponentHarpoon      = "harpoon"
 )
 
 // NewLogger constructs a slog.Logger configured according to the provided config.

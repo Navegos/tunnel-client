@@ -67,6 +67,32 @@
 - Forwards inbound `Authorization` headers and discovery GETs through the tunnel-client; discovery payload `resource` and `WWW-Authenticate resource_metadata` are rewritten to tunnel-service URLs for the same `tunnel_id`.
 - The authorization server is not tunneled. If it is only reachable on-prem/behind a firewall and not accessible from the internet or the tunnel-client host, the OAuth flow can fail.
 
+## Harpoon MCP (outbound HTTP allowlist)
+
+`harpoon` is an embedded MCP server that exposes an allowlisted, buffered HTTP client with labeled targets.
+
+- **Target mappings**
+  - Flag (repeatable): `--harpoon-target="label=auth,url=https://auth.example.com,desc=Auth server"`
+  - Env: `HARPOON_TARGETS` (semicolon- or newline-delimited list of the same `label=...,url=...,desc=...` entries)
+- **Allow plaintext HTTP**
+  - Flag: `--harpoon-allow-plaintext-http`
+  - Env: `HARPOON_ALLOW_PLAINTEXT_HTTP`
+  - Default: `false`
+- **Max response bytes**
+  - Flag: `--harpoon-max-response-bytes`
+  - Env: `HARPOON_MAX_RESPONSE_BYTES`
+  - Default: `102400`
+  - Note: this is the upper ceiling for per-call overrides.
+- **Max redirects**
+  - Flag: `--harpoon-max-redirects`
+  - Env: `HARPOON_MAX_REDIRECTS`
+  - Default: `5`
+  - Note: this is the upper ceiling for per-call overrides.
+- **Additional transport (optional)**
+  - Flag: `--harpoon-additional-transport=http-streamable`
+  - Env: `HARPOON_ADDITIONAL_TRANSPORTS` (semicolon- or newline-delimited list)
+  - Behavior: exposes the harpoon MCP server over the admin/health HTTP server at `GET/POST /harpoon/mcp` (loopback-only unless `--allow-remote-ui` is set).
+
 ## Logging
 
 - **Level**

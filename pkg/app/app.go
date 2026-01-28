@@ -9,6 +9,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/config"
 	controlplane "go.openai.org/api/tunnel-client/pkg/controlplane/fx"
 	"go.openai.org/api/tunnel-client/pkg/dispatcher"
+	"go.openai.org/api/tunnel-client/pkg/harpoon"
 	"go.openai.org/api/tunnel-client/pkg/health"
 	"go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
@@ -33,11 +34,13 @@ func Options(cfg *config.Config, opts ...fx.Option) []fx.Option {
 			&cfg.Process,
 			&cfg.MCP,
 			&cfg.AdminUI,
+			&cfg.Harpoon,
 		),
 		log.Module,
 		adminui.Module,
 		dispatcher.Module,
 		controlplane.Module,
+		harpoon.Module,
 		mcpclient.Module,
 		metrics.MetricModule,
 		oauth.Module,

@@ -238,6 +238,75 @@ func TestLoadRejectsInvalidControlPlaneAPIKeyFlag(t *testing.T) {
 	}
 }
 
+func TestLoadParsesHarpoonTargetsFromFlags(t *testing.T) {
+	args := []string{"--harpoon-target", "label=auth,url=https://example.com,desc=Auth server"}
+	lookup := map[string]string{
+		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
+		"CONTROL_PLANE_API_KEY":   "control-key",
+		"LOG_FORMAT":              "struct-text",
+		"MCP_SERVER_URL":          "https://mcp.example",
+	}
+
+	cfg, err := Load(args, func(key string) (string, bool) {
+		val, ok := lookup[key]
+		return val, ok
+	})
+	if err != nil {
+		t.Fatalf("unexpected error loading harpoon targets: %v", err)
+	}
+	if len(cfg.Harpoon.Targets) != 1 {
+		t.Fatalf("expected 1 harpoon target, got %d", len(cfg.Harpoon.Targets))
+	}
+	if cfg.Harpoon.Targets[0].Label != "auth" {
+		t.Fatalf("expected harpoon target label auth, got %s", cfg.Harpoon.Targets[0].Label)
+	}
+	if cfg.Harpoon.Targets[0].Description != "Auth server" {
+		t.Fatalf("expected harpoon target description Auth server, got %s", cfg.Harpoon.Targets[0].Description)
+	}
+	if cfg.Harpoon.Targets[0].BaseURL == nil || cfg.Harpoon.Targets[0].BaseURL.String() != "https://example.com" {
+		t.Fatalf("expected harpoon target url https://example.com, got %v", cfg.Harpoon.Targets[0].BaseURL)
+	}
+}
+
+func TestLoadParsesHarpoonAdditionalTransport(t *testing.T) {
+	args := []string{"--harpoon-additional-transport", "http-streamable"}
+	lookup := map[string]string{
+		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
+		"CONTROL_PLANE_API_KEY":   "control-key",
+		"LOG_FORMAT":              "struct-text",
+		"MCP_SERVER_URL":          "https://mcp.example",
+	}
+
+	cfg, err := Load(args, func(key string) (string, bool) {
+		val, ok := lookup[key]
+		return val, ok
+	})
+	if err != nil {
+		t.Fatalf("unexpected error loading harpoon transport: %v", err)
+	}
+	if !cfg.Harpoon.AdditionalTransportEnabled(HarpoonTransportHTTPStreamable) {
+		t.Fatalf("expected harpoon http-streamable transport to be enabled")
+	}
+}
+
+func TestLoadRejectsHarpoonMaxResponseBytesTooHigh(t *testing.T) {
+	lookup := map[string]string{
+		"CONTROL_PLANE_TUNNEL_ID":    envTunnelID,
+		"CONTROL_PLANE_API_KEY":      "control-key",
+		"LOG_FORMAT":                 "struct-text",
+		"MCP_SERVER_URL":             "https://mcp.example",
+		"HARPOON_MAX_RESPONSE_BYTES": "999999",
+	}
+
+	_, err := Load(nil, func(key string) (string, bool) {
+		val, ok := lookup[key]
+		return val, ok
+	})
+	if err == nil {
+		t.Fatalf("expected error for oversized harpoon max response bytes")
+	}
+}
+
 func TestLoadRejectsUnsetEnvForControlPlaneAPIKeyFlag(t *testing.T) {
 	args := []string{"--control-plane.api-key", "env:OPENAI_API_KEY_STAGING"}
 	_, err := Load(args, func(key string) (string, bool) {

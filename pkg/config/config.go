@@ -36,6 +36,13 @@ const (
 	MCPTransportInMemory       MCPTransportKind = "in-memory"
 )
 
+// HarpoonTransportKind enumerates supported harpoon transports.
+type HarpoonTransportKind string
+
+const (
+	HarpoonTransportHTTPStreamable HarpoonTransportKind = "http-streamable"
+)
+
 const (
 	defaultControlPlaneBaseURL                = "https://api.openai.com"
 	defaultControlPlaneMaxInFlight            = 20
@@ -46,6 +53,8 @@ const (
 	defaultHealthListenAddr                   = ":8080"
 	defaultMCPConnectionMaxTTL                = 10 * time.Minute
 	defaultMCPMaxConcurrentRequests           = 10
+	DefaultHarpoonMaxResponseBytes            = 100 * 1024
+	DefaultHarpoonMaxRedirects                = 5
 )
 
 const _ = uint(maxControlPlaneMaxInFlight - defaultControlPlaneMaxInFlight)
@@ -67,6 +76,7 @@ type Config struct {
 	Process      ProcessConfig
 	MCP          MCPConfig
 	AdminUI      AdminUIConfig
+	Harpoon      HarpoonConfig
 }
 
 // AdminUIConfig defines runtime behavior for the embedded admin web UI.
@@ -123,6 +133,32 @@ type MCPConfig struct {
 	TransportKind         MCPTransportKind
 	ConnectionMaxTTL      time.Duration
 	MaxConcurrentRequests int
+}
+
+// HarpoonConfig captures configuration for the embedded harpoon MCP server.
+type HarpoonConfig struct {
+	AllowPlaintextHTTP   bool
+	MaxResponseBytes     int
+	MaxRedirects         int
+	AdditionalTransports []HarpoonTransportKind
+	Targets              []HarpoonTarget
+}
+
+// HarpoonTarget describes a configured harpoon target.
+type HarpoonTarget struct {
+	Label       string
+	Description string
+	BaseURL     *url.URL
+}
+
+// AdditionalTransportEnabled reports whether a transport is enabled.
+func (h HarpoonConfig) AdditionalTransportEnabled(kind HarpoonTransportKind) bool {
+	for _, transport := range h.AdditionalTransports {
+		if transport == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // Load builds a Config by combining CLI flag arguments with environment variables.
@@ -192,6 +228,11 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("mcp.command", "", "Command to launch an MCP server over stdio (env.MCP_COMMAND)")
 	fs.Duration("mcp.connection-max-ttl", defaultMCPConnectionMaxTTL, "Maximum lifetime of MCP transport connections (env.MCP_CONNECTION_MAX_TTL)")
 	fs.Int("mcp.max-concurrent-requests", defaultMCPMaxConcurrentRequests, "Maximum number of concurrent requests to the MCP server (env.MCP_MAX_CONCURRENT_REQUESTS)")
+	fs.StringArray("harpoon-target", nil, "Harpoon target mapping (format 'label=...,url=...,desc=...') (env.HARPOON_TARGETS)")
+	fs.Bool("harpoon-allow-plaintext-http", false, "Allow http:// harpoon targets and redirects (env.HARPOON_ALLOW_PLAINTEXT_HTTP)")
+	fs.Int("harpoon-max-response-bytes", DefaultHarpoonMaxResponseBytes, "Maximum harpoon response size in bytes (env.HARPOON_MAX_RESPONSE_BYTES)")
+	fs.Int("harpoon-max-redirects", DefaultHarpoonMaxRedirects, "Maximum number of harpoon redirects (env.HARPOON_MAX_REDIRECTS)")
+	fs.StringArray("harpoon-additional-transport", nil, "Additional harpoon transports (http-streamable) (env.HARPOON_ADDITIONAL_TRANSPORTS)")
 
 	if f := fs.Lookup("log.file"); f != nil {
 		f.DefValue = "stdout"
@@ -230,6 +271,11 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 		return nil, err
 	}
 
+	harpoon, err := buildHarpoonConfig(fs, lookupEnv)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
 		ControlPlane: controlPlane,
 		Logging:      logging,
@@ -237,6 +283,7 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 		Process:      process,
 		MCP:          mcp,
 		AdminUI:      adminUI,
+		Harpoon:      harpoon,
 	}
 
 	return cfg, nil
@@ -722,6 +769,198 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (M
 		ConnectionMaxTTL:      ttl,
 		MaxConcurrentRequests: maxConcurrent,
 	}, nil
+}
+
+func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (HarpoonConfig, error) {
+	allowPlaintext, err := getBool(fs, lookupEnv, "harpoon-allow-plaintext-http", "HARPOON_ALLOW_PLAINTEXT_HTTP")
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
+	maxResponseBytes, err := getInt(fs, lookupEnv, "harpoon-max-response-bytes", "HARPOON_MAX_RESPONSE_BYTES", DefaultHarpoonMaxResponseBytes)
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
+	if maxResponseBytes <= 0 {
+		return HarpoonConfig{}, errors.New("harpoon-max-response-bytes must be positive")
+	}
+	if maxResponseBytes > DefaultHarpoonMaxResponseBytes {
+		return HarpoonConfig{}, fmt.Errorf("harpoon-max-response-bytes must be less than or equal to %d", DefaultHarpoonMaxResponseBytes)
+	}
+	maxRedirects, err := getInt(fs, lookupEnv, "harpoon-max-redirects", "HARPOON_MAX_REDIRECTS", DefaultHarpoonMaxRedirects)
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
+	if maxRedirects < 0 {
+		return HarpoonConfig{}, errors.New("harpoon-max-redirects must be non-negative")
+	}
+	if maxRedirects > DefaultHarpoonMaxRedirects {
+		return HarpoonConfig{}, fmt.Errorf("harpoon-max-redirects must be less than or equal to %d", DefaultHarpoonMaxRedirects)
+	}
+	targets, err := buildHarpoonTargets(fs, lookupEnv, allowPlaintext)
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
+	additional, err := buildHarpoonAdditionalTransports(fs, lookupEnv)
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
+	return HarpoonConfig{
+		AllowPlaintextHTTP:   allowPlaintext,
+		MaxResponseBytes:     maxResponseBytes,
+		MaxRedirects:         maxRedirects,
+		Targets:              targets,
+		AdditionalTransports: additional,
+	}, nil
+}
+
+func buildHarpoonTargets(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), allowPlaintext bool) ([]HarpoonTarget, error) {
+	var rawTargets []string
+	if flag := fs.Lookup("harpoon-target"); flag != nil && flag.Changed {
+		values, err := fs.GetStringArray("harpoon-target")
+		if err != nil {
+			return nil, fmt.Errorf("invalid value for --harpoon-target: %w", err)
+		}
+		rawTargets = append(rawTargets, values...)
+	} else if envVal, ok := lookupEnv("HARPOON_TARGETS"); ok && envVal != "" {
+		rawTargets = splitTargetList(envVal)
+	}
+
+	targets := make([]HarpoonTarget, 0, len(rawTargets))
+	for _, raw := range rawTargets {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		target, err := parseHarpoonTarget(raw, allowPlaintext)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, nil
+}
+
+func splitTargetList(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ';' || r == '\n'
+	})
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if trimmed := strings.TrimSpace(field); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func parseHarpoonTarget(raw string, allowPlaintext bool) (HarpoonTarget, error) {
+	parts := strings.Split(raw, ",")
+	values := make(map[string]string, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			return HarpoonTarget{}, fmt.Errorf("invalid harpoon target %q: expected key=value pairs", raw)
+		}
+		key := strings.TrimSpace(strings.ToLower(kv[0]))
+		val := strings.Trim(strings.TrimSpace(kv[1]), `"'`)
+		if key == "" {
+			return HarpoonTarget{}, fmt.Errorf("invalid harpoon target %q: empty key", raw)
+		}
+		values[key] = val
+	}
+
+	label := values["label"]
+	urlRaw := values["url"]
+	if label == "" || urlRaw == "" {
+		return HarpoonTarget{}, fmt.Errorf("invalid harpoon target %q: label and url are required", raw)
+	}
+	parsed, err := parseURL(urlRaw)
+	if err != nil {
+		return HarpoonTarget{}, fmt.Errorf("invalid harpoon target url %q: %w", urlRaw, err)
+	}
+	if !allowPlaintext && !strings.EqualFold(parsed.Scheme, "https") {
+		return HarpoonTarget{}, fmt.Errorf("invalid harpoon target url %q: https is required", urlRaw)
+	}
+	return HarpoonTarget{
+		Label:       label,
+		Description: values["desc"],
+		BaseURL:     parsed,
+	}, nil
+}
+
+func buildHarpoonAdditionalTransports(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) ([]HarpoonTransportKind, error) {
+	var raw []string
+	if flag := fs.Lookup("harpoon-additional-transport"); flag != nil && flag.Changed {
+		values, err := fs.GetStringArray("harpoon-additional-transport")
+		if err != nil {
+			return nil, fmt.Errorf("invalid value for --harpoon-additional-transport: %w", err)
+		}
+		raw = append(raw, values...)
+	} else if envVal, ok := lookupEnv("HARPOON_ADDITIONAL_TRANSPORTS"); ok && envVal != "" {
+		raw = splitTargetList(envVal)
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	seen := make(map[HarpoonTransportKind]struct{})
+	out := make([]HarpoonTransportKind, 0, len(raw))
+	for _, entry := range raw {
+		entry = strings.TrimSpace(strings.ToLower(entry))
+		if entry == "" {
+			continue
+		}
+		kind := HarpoonTransportKind(entry)
+		switch kind {
+		case HarpoonTransportHTTPStreamable:
+		default:
+			return nil, fmt.Errorf("unsupported harpoon transport %q", entry)
+		}
+		if _, ok := seen[kind]; ok {
+			continue
+		}
+		seen[kind] = struct{}{}
+		out = append(out, kind)
+	}
+	return out, nil
+}
+
+func getInt(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName, envName string, defaultValue int) (int, error) {
+	if flag := fs.Lookup(flagName); flag != nil && flag.Changed {
+		val, err := strconv.Atoi(flag.Value.String())
+		if err != nil {
+			return 0, fmt.Errorf("invalid value for --%s: %w", flagName, err)
+		}
+		return val, nil
+	}
+	if envVal, ok := lookupEnv(envName); ok && envVal != "" {
+		val, err := strconv.Atoi(envVal)
+		if err != nil {
+			return 0, fmt.Errorf("invalid %s: %w", envName, err)
+		}
+		return val, nil
+	}
+	return defaultValue, nil
+}
+
+func getBool(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName, envName string) (bool, error) {
+	if flag := fs.Lookup(flagName); flag != nil && flag.Changed {
+		val, err := strconv.ParseBool(flag.Value.String())
+		if err != nil {
+			return false, fmt.Errorf("parse --%s: %w", flagName, err)
+		}
+		return val, nil
+	}
+	if envVal, ok := lookupEnv(envName); ok && envVal != "" {
+		val, err := strconv.ParseBool(envVal)
+		if err != nil {
+			return false, fmt.Errorf("parse %s: %w", envName, err)
+		}
+		return val, nil
+	}
+	return false, nil
 }
 
 func parseCommandArgv(raw string) ([]string, error) {
