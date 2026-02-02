@@ -6,22 +6,23 @@ import (
 	"time"
 )
 
-const callBufferSize = 10
+const callBufferSize = 100
 
 // CallEntry captures a recent harpoon call for the admin UI.
 type CallEntry struct {
-	Timestamp    time.Time `json:"timestamp"`
-	Label        string    `json:"label"`
-	URL          string    `json:"url"`
-	Method       string    `json:"method"`
-	Status       int       `json:"status"`
-	LatencyMS    int       `json:"latency_ms"`
-	ReqBytes     int       `json:"req_bytes"`
-	RespBytes    int       `json:"resp_bytes"`
-	Error        string    `json:"error,omitempty"`
-	RequestBody  string    `json:"request_body,omitempty"`
-	ResponseBody string    `json:"response_body,omitempty"`
-	BodyIsBase64 bool      `json:"body_is_base64,omitempty"`
+	Timestamp               time.Time `json:"timestamp"`
+	Label                   string    `json:"label"`
+	URL                     string    `json:"url"`
+	Method                  string    `json:"method"`
+	Status                  int       `json:"status"`
+	LatencyMS               int       `json:"latency_ms"`
+	ReqBytes                int       `json:"req_bytes"`
+	RespBytes               int       `json:"resp_bytes"`
+	Error                   string    `json:"error,omitempty"`
+	RequestBody             string    `json:"request_body,omitempty"`
+	ResponseBody            string    `json:"response_body,omitempty"`
+	ResponseBodyTransformed string    `json:"response_body_transformed,omitempty"`
+	BodyIsBase64            bool      `json:"body_is_base64,omitempty"`
 }
 
 // CallBuffer keeps a fixed-size ring buffer of recent calls.

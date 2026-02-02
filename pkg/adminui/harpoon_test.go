@@ -1,6 +1,8 @@
 package adminui
 
 import (
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -11,35 +13,56 @@ import (
 )
 
 func TestBuildHarpoonStatusDisabledWithoutTargets(t *testing.T) {
-	registry, err := harpoon.NewRegistry(true, nil)
+	registry, err := harpoon.NewRegistry(newHarpoonTestLogger(), true, nil)
 	require.NoError(t, err)
 
 	out := buildHarpoonStatus(registry, &config.HarpoonConfig{})
 	require.False(t, out.Enabled)
 	require.Equal(t, "no targets configured", out.Reason)
+	require.False(t, out.CapturePayloads)
+	require.False(t, out.AllowPlaintextHTTP)
+	require.Zero(t, out.MaxResponseBytes)
+	require.Zero(t, out.MaxRedirects)
 }
 
-func TestBuildHarpoonTargetsIncludesConfig(t *testing.T) {
-	registry, err := harpoon.NewRegistry(true, []harpoon.Target{{
-		Label:       "auth",
-		Description: "Auth service",
-		BaseURL:     mustParseURL(t, "http://example.com/base"),
+func TestBuildHarpoonStatusIncludesPolicy(t *testing.T) {
+	registry, err := harpoon.NewRegistry(newHarpoonTestLogger(), true, []harpoon.Target{{
+		Label:   "auth",
+		BaseURL: mustParseURL(t, "http://example.com/base"),
 	}})
 	require.NoError(t, err)
 
 	cfg := &config.HarpoonConfig{
+		CapturePayloads:    true,
 		AllowPlaintextHTTP: true,
 		MaxResponseBytes:   123,
 		MaxRedirects:       4,
 	}
 
-	out := buildHarpoonTargets(registry, cfg)
+	out := buildHarpoonStatus(registry, cfg)
+	require.True(t, out.Enabled)
+	require.True(t, out.CapturePayloads)
+	require.True(t, out.AllowPlaintextHTTP)
+	require.Equal(t, 123, out.MaxResponseBytes)
+	require.Equal(t, 4, out.MaxRedirects)
+}
+
+func TestBuildHarpoonTargetsIncludesTargetFields(t *testing.T) {
+	registry, err := harpoon.NewRegistry(newHarpoonTestLogger(), true, []harpoon.Target{{
+		Label:           "auth",
+		Description:     "Auth service",
+		Source:          "config",
+		InclusionReason: "suffix:.internal",
+		BaseURL:         mustParseURL(t, "http://example.com/base"),
+	}})
+	require.NoError(t, err)
+
+	out := buildHarpoonTargets(registry)
 	require.Len(t, out.Targets, 1)
 	require.Equal(t, "auth", out.Targets[0].Label)
 	require.Equal(t, "http://example.com/base", out.Targets[0].URL)
-	require.True(t, out.Targets[0].AllowPlaintextHTTP)
-	require.Equal(t, 123, out.Targets[0].MaxResponseBytes)
-	require.Equal(t, 4, out.Targets[0].MaxRedirects)
+	require.Equal(t, "config", out.Targets[0].Source)
+	require.Equal(t, "suffix:.internal", out.Targets[0].InclusionReason)
 }
 
 func TestBuildHarpoonCallsIncludesPayloadsWhenEnabled(t *testing.T) {
@@ -81,4 +104,8 @@ func TestBuildHarpoonCallsOmitsPayloadsWhenDisabled(t *testing.T) {
 	require.Nil(t, out.Calls[0].RequestBody)
 	require.Nil(t, out.Calls[0].ResponseBody)
 	require.Nil(t, out.Calls[0].BodyIsBase64)
+}
+
+func newHarpoonTestLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

@@ -102,8 +102,13 @@ func buildWellKnownCandidates(serverURL *url.URL) []DiscoveryCandidate {
 	candidates := make([]DiscoveryCandidate, 0, 2)
 	pathSuffix := strings.Trim(serverURL.EscapedPath(), "/")
 	if pathSuffix != "" {
+		normalizedWellKnown := strings.TrimPrefix(defaultProtectedResourceMetadataURI, "/")
 		withPath := *base
-		withPath.Path = path.Join(base.Path, pathSuffix)
+		if strings.HasPrefix(pathSuffix, normalizedWellKnown) {
+			withPath.Path = "/" + pathSuffix
+		} else {
+			withPath.Path = path.Join(base.Path, pathSuffix)
+		}
 		candidates = append(candidates, DiscoveryCandidate{
 			URL:    &withPath,
 			Source: DiscoverySourceWellKnownPath,

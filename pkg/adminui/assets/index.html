@@ -184,8 +184,8 @@
 
     <template id="harpoon-template">
       <section class="panel" id="panel-harpoon" aria-hidden="true">
-        <div class="row">
-          <div>
+        <div class="row harpoon-toolbar">
+          <div class="harpoon-summary">
             <div class="muted small">Harpoon</div>
             <div class="row small" style="margin-top: 6px">
               <span class="badge" id="harpoonStatusBadge">Harpoon: …</span>
@@ -196,34 +196,45 @@
               routes through the tunnel-client channel and keeps target URLs hidden.
             </div>
           </div>
-          <span style="flex:1"></span>
-          <label class="small" style="display:flex; align-items:center; gap:8px">
-            Label
-            <select id="harpoonLabelFilter"></select>
-          </label>
-          <button id="harpoonRefresh">Refresh</button>
-          <span id="harpoonErr" class="muted small"></span>
+          <span class="harpoon-toolbar-spacer"></span>
+          <div class="row harpoon-controls">
+            <label class="small" style="display:flex; align-items:center; gap:8px">
+              Label
+              <select id="harpoonLabelFilter"></select>
+            </label>
+            <button id="harpoonRefresh">Refresh</button>
+            <span id="harpoonErr" class="muted small"></span>
+          </div>
         </div>
         <div id="harpoonDisabled" class="harpoon-disabled muted" style="display:none">
           Harpoon disabled
         </div>
         <div id="harpoonContent" class="grid" style="margin-top: 12px">
-          <div class="card span-6">
-            <div class="muted small">Targets</div>
-            <table class="harpoon-table" style="margin-top: 12px">
-              <thead>
-                <tr>
-                  <th>Label</th>
-                  <th>URL</th>
-                  <th>Description</th>
-                  <th>Meta</th>
-                </tr>
-              </thead>
-              <tbody id="harpoonTargets"></tbody>
-            </table>
+          <div class="card span-12">
+            <div class="muted small">Harpoon policy</div>
+            <div class="kv" style="margin-top: 8px">
+              <div class="muted">allow_plaintext_http</div><div class="mono" id="harpoonPolicyAllowPlaintext">—</div>
+              <div class="muted">max_response_bytes</div><div class="mono" id="harpoonPolicyMaxResponseBytes">—</div>
+              <div class="muted">max_redirects</div><div class="mono" id="harpoonPolicyMaxRedirects">—</div>
+            </div>
           </div>
           <div class="card span-6">
-            <div class="muted small">Recent calls</div>
+            <div class="muted small">Targets</div>
+            <div class="harpoon-table-wrap">
+              <table class="harpoon-table" style="margin-top: 12px">
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th>URL</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody id="harpoonTargets"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card span-6">
+            <div class="muted small">Recent calls (last 100)</div>
             <div id="harpoonCalls" class="harpoon-calls" style="margin-top: 12px"></div>
           </div>
         </div>

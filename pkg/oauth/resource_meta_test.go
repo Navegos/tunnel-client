@@ -42,6 +42,14 @@ func TestBuildResourceMetadataURLs(t *testing.T) {
 				"https://example.com/.well-known/oauth-protected-resource",
 			},
 		},
+		{
+			name: "already-well-known",
+			raw:  "https://example.com/.well-known/oauth-protected-resource/public/mcp",
+			want: []string{
+				"https://example.com/.well-known/oauth-protected-resource/public/mcp",
+				"https://example.com/.well-known/oauth-protected-resource",
+			},
+		},
 	}
 
 	for _, tc := range testCases {

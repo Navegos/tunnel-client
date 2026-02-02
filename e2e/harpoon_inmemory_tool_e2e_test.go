@@ -56,7 +56,6 @@ func TestHarpoonInMemoryCallTargetToolCall(t *testing.T) {
 					"name":"call_target",
 					"arguments":{
 						"label":"`+targetLabel+`",
-						"path":"/",
 						"method":"GET",
 						"headers":{}
 					},

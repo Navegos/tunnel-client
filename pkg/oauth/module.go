@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"go.uber.org/fx"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/harpoon/hostbus"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 )
 
@@ -29,6 +31,7 @@ type discoveryParams struct {
 	MCPConfig  *config.MCPConfig
 	HTTPClient *http.Client `name:"mcp_client"`
 	State      *DiscoveryState
+	Bus        hostbus.HostRegistrationBus
 }
 
 func startOAuthDiscovery(p discoveryParams) error {
@@ -46,6 +49,9 @@ func startOAuthDiscovery(p discoveryParams) error {
 	}
 	if p.Logger == nil {
 		return fmt.Errorf("oauth discovery: logger is required")
+	}
+	if p.Bus == nil {
+		return fmt.Errorf("oauth discovery: host registration bus is required")
 	}
 
 	logger := p.Logger.With(tclog.FieldComponent, "oauth")
@@ -95,6 +101,17 @@ func startOAuthDiscovery(p discoveryParams) error {
 					return
 				}
 				p.State.Set(result, nil, probe, candidateStrings)
+				bundle, err := buildURLBundleFromPRMD(resp.Payload(), result.FetchedAt, sourceURL)
+				if err != nil {
+					logger.ErrorContext(fetchCtx, "OAuth discovery bundle build failed", slog.String("error", err.Error()))
+				} else {
+					logDiscoveredURLs(logger, bundle)
+					publishCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					if err := p.Bus.Publish(publishCtx, bundle); err != nil {
+						logger.ErrorContext(fetchCtx, "OAuth discovery bundle publish failed", slog.String("error", err.Error()))
+					}
+				}
 				logger.InfoContext(fetchCtx, "OAuth discovery ProtectedResourceMetaData fetched",
 					slog.Int("status_code", resp.ResponseCode()),
 					slog.Int64("latency_ms", time.Since(start).Milliseconds()),
@@ -106,4 +123,35 @@ func startOAuthDiscovery(p discoveryParams) error {
 	})
 
 	return nil
+}
+
+func logDiscoveredURLs(logger *slog.Logger, bundle hostbus.URLBundle) {
+	if logger == nil || len(bundle.URLs) == 0 {
+		return
+	}
+	fields := make([]any, 0, len(bundle.URLs)*3)
+	for idx, record := range bundle.URLs {
+		fields = append(fields,
+			slog.String(fmt.Sprintf("url_%d", idx), safeURL(record.URL)),
+			slog.String(fmt.Sprintf("role_%d", idx), tagValue(record.Tags, hostbus.TagKeyRole)),
+			slog.String(fmt.Sprintf("desc_%d", idx), record.Description),
+		)
+	}
+	logger.Info("OAuth discovery URLs published", fields...)
+}
+
+func tagValue(tags []hostbus.Tag, key hostbus.TagKey) string {
+	for _, tag := range tags {
+		if tag.Key == key {
+			return tag.Value
+		}
+	}
+	return ""
+}
+
+func safeURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return u.String()
 }

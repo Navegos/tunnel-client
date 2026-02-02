@@ -10,9 +10,12 @@ import (
 )
 
 type harpoonStatusResponse struct {
-	Enabled         bool   `json:"enabled"`
-	Reason          string `json:"reason,omitempty"`
-	CapturePayloads bool   `json:"capture_payloads"`
+	Enabled            bool   `json:"enabled"`
+	Reason             string `json:"reason,omitempty"`
+	CapturePayloads    bool   `json:"capture_payloads"`
+	AllowPlaintextHTTP bool   `json:"allow_plaintext_http"`
+	MaxResponseBytes   int    `json:"max_response_bytes"`
+	MaxRedirects       int    `json:"max_redirects"`
 }
 
 type harpoonTargetsResponse struct {
@@ -20,12 +23,11 @@ type harpoonTargetsResponse struct {
 }
 
 type harpoonTargetResponse struct {
-	Label              string `json:"label"`
-	URL                string `json:"url"`
-	Description        string `json:"description,omitempty"`
-	AllowPlaintextHTTP bool   `json:"allow_plaintext_http"`
-	MaxResponseBytes   int    `json:"max_response_bytes"`
-	MaxRedirects       int    `json:"max_redirects"`
+	Label           string `json:"label"`
+	URL             string `json:"url"`
+	Description     string `json:"description,omitempty"`
+	Source          string `json:"source,omitempty"`
+	InclusionReason string `json:"inclusion_reason,omitempty"`
 }
 
 type harpoonCallsResponse struct {
@@ -33,18 +35,19 @@ type harpoonCallsResponse struct {
 }
 
 type harpoonCallResponse struct {
-	Timestamp    time.Time `json:"timestamp"`
-	Label        string    `json:"label"`
-	URL          string    `json:"url"`
-	Method       string    `json:"method"`
-	Status       int       `json:"status"`
-	LatencyMS    int       `json:"latency_ms"`
-	ReqBytes     int       `json:"req_bytes"`
-	RespBytes    int       `json:"resp_bytes"`
-	Error        string    `json:"error,omitempty"`
-	RequestBody  *string   `json:"request_body,omitempty"`
-	ResponseBody *string   `json:"response_body,omitempty"`
-	BodyIsBase64 *bool     `json:"body_is_base64,omitempty"`
+	Timestamp               time.Time `json:"timestamp"`
+	Label                   string    `json:"label"`
+	URL                     string    `json:"url"`
+	Method                  string    `json:"method"`
+	Status                  int       `json:"status"`
+	LatencyMS               int       `json:"latency_ms"`
+	ReqBytes                int       `json:"req_bytes"`
+	RespBytes               int       `json:"resp_bytes"`
+	Error                   string    `json:"error,omitempty"`
+	RequestBody             *string   `json:"request_body,omitempty"`
+	ResponseBody            *string   `json:"response_body,omitempty"`
+	ResponseBodyTransformed *string   `json:"response_body_transformed,omitempty"`
+	BodyIsBase64            *bool     `json:"body_is_base64,omitempty"`
 }
 
 func handleHarpoonStatus(registry *harpoon.Registry, cfg *config.HarpoonConfig) http.HandlerFunc {
@@ -53,9 +56,9 @@ func handleHarpoonStatus(registry *harpoon.Registry, cfg *config.HarpoonConfig) 
 	}
 }
 
-func handleHarpoonTargets(registry *harpoon.Registry, cfg *config.HarpoonConfig) http.HandlerFunc {
+func handleHarpoonTargets(registry *harpoon.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, buildHarpoonTargets(registry, cfg))
+		writeJSON(w, http.StatusOK, buildHarpoonTargets(registry))
 	}
 }
 
@@ -65,7 +68,7 @@ func handleHarpoonCalls(buffer *harpoon.CallBuffer, cfg *config.HarpoonConfig) h
 		if r != nil && r.URL != nil {
 			label = strings.TrimSpace(r.URL.Query().Get("label"))
 		}
-		limit := parseLimit(r, 10, 10)
+		limit := parseLimit(r, 100, 100)
 		writeJSON(w, http.StatusOK, buildHarpoonCalls(buffer, cfg, label, limit))
 	}
 }
@@ -82,43 +85,43 @@ func buildHarpoonStatus(registry *harpoon.Registry, cfg *config.HarpoonConfig) h
 	}
 
 	capture := false
+	allowPlaintext := false
+	maxResponse := 0
+	maxRedirects := 0
 	if cfg != nil {
 		capture = cfg.CapturePayloads
+		allowPlaintext = cfg.AllowPlaintextHTTP
+		maxResponse = cfg.MaxResponseBytes
+		maxRedirects = cfg.MaxRedirects
 	}
 
 	return harpoonStatusResponse{
-		Enabled:         enabled,
-		Reason:          reason,
-		CapturePayloads: capture,
+		Enabled:            enabled,
+		Reason:             reason,
+		CapturePayloads:    capture,
+		AllowPlaintextHTTP: allowPlaintext,
+		MaxResponseBytes:   maxResponse,
+		MaxRedirects:       maxRedirects,
 	}
 }
 
-func buildHarpoonTargets(registry *harpoon.Registry, cfg *config.HarpoonConfig) harpoonTargetsResponse {
+func buildHarpoonTargets(registry *harpoon.Registry) harpoonTargetsResponse {
 	if registry == nil {
 		return harpoonTargetsResponse{}
 	}
 	targets := registry.Targets()
 	out := make([]harpoonTargetResponse, 0, len(targets))
-	allowPlaintext := false
-	maxResponse := 0
-	maxRedirects := 0
-	if cfg != nil {
-		allowPlaintext = cfg.AllowPlaintextHTTP
-		maxResponse = cfg.MaxResponseBytes
-		maxRedirects = cfg.MaxRedirects
-	}
 	for _, target := range targets {
 		url := ""
 		if target.BaseURL != nil {
 			url = target.BaseURL.String()
 		}
 		out = append(out, harpoonTargetResponse{
-			Label:              target.Label,
-			URL:                url,
-			Description:        target.Description,
-			AllowPlaintextHTTP: allowPlaintext,
-			MaxResponseBytes:   maxResponse,
-			MaxRedirects:       maxRedirects,
+			Label:           target.Label,
+			URL:             url,
+			Description:     target.Description,
+			Source:          target.Source,
+			InclusionReason: target.InclusionReason,
 		})
 	}
 	return harpoonTargetsResponse{Targets: out}
@@ -146,9 +149,13 @@ func buildHarpoonCalls(buffer *harpoon.CallBuffer, cfg *config.HarpoonConfig, la
 		if capture {
 			req := entry.RequestBody
 			resp := entry.ResponseBody
+			respTransformed := entry.ResponseBodyTransformed
 			base64Flag := entry.BodyIsBase64
 			call.RequestBody = &req
 			call.ResponseBody = &resp
+			if respTransformed != "" {
+				call.ResponseBodyTransformed = &respTransformed
+			}
 			call.BodyIsBase64 = &base64Flag
 		}
 		out = append(out, call)

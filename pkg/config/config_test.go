@@ -331,6 +331,82 @@ func TestLoadParsesHarpoonCapturePayloads(t *testing.T) {
 	}
 }
 
+func TestLoadHarpoonHostClassifierDefaults(t *testing.T) {
+	lookup := map[string]string{
+		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
+		"CONTROL_PLANE_API_KEY":   "control-key",
+		"LOG_FORMAT":              "struct-text",
+		"MCP_SERVER_URL":          "https://mcp.example",
+	}
+
+	cfg, err := Load(nil, func(key string) (string, bool) {
+		val, ok := lookup[key]
+		return val, ok
+	})
+	if err != nil {
+		t.Fatalf("unexpected error loading defaults: %v", err)
+	}
+	if !cfg.Harpoon.HostClassifier.IncludeLoopback {
+		t.Fatalf("expected loopback default to be true")
+	}
+	if !cfg.Harpoon.HostClassifier.IncludePrivate {
+		t.Fatalf("expected private default to be true")
+	}
+	if len(cfg.Harpoon.HostClassifier.IncludeSuffix) != 0 || len(cfg.Harpoon.HostClassifier.IncludeRegex) != 0 {
+		t.Fatalf("expected empty suffix/regex defaults")
+	}
+}
+
+func TestLoadHarpoonHostClassifierFlags(t *testing.T) {
+	args := []string{
+		"--harpoon-hosts-include-suffix", "internal",
+		"--harpoon-hosts-include-regex", "^svc-.*",
+		"--harpoon-hosts-include-loopback=false",
+		"--harpoon-hosts-include-private=false",
+	}
+	lookup := map[string]string{
+		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
+		"CONTROL_PLANE_API_KEY":   "control-key",
+		"LOG_FORMAT":              "struct-text",
+		"MCP_SERVER_URL":          "https://mcp.example",
+	}
+
+	cfg, err := Load(args, func(key string) (string, bool) {
+		val, ok := lookup[key]
+		return val, ok
+	})
+	if err != nil {
+		t.Fatalf("unexpected error loading host flags: %v", err)
+	}
+	if cfg.Harpoon.HostClassifier.IncludeLoopback || cfg.Harpoon.HostClassifier.IncludePrivate {
+		t.Fatalf("expected loopback/private to be disabled")
+	}
+	if len(cfg.Harpoon.HostClassifier.IncludeSuffix) != 1 || cfg.Harpoon.HostClassifier.IncludeSuffix[0] != "internal" {
+		t.Fatalf("unexpected suffix values: %#v", cfg.Harpoon.HostClassifier.IncludeSuffix)
+	}
+	if len(cfg.Harpoon.HostClassifier.IncludeRegex) != 1 || cfg.Harpoon.HostClassifier.IncludeRegex[0] != "^svc-.*" {
+		t.Fatalf("unexpected regex values: %#v", cfg.Harpoon.HostClassifier.IncludeRegex)
+	}
+}
+
+func TestLoadRejectsInvalidHarpoonHostRegex(t *testing.T) {
+	lookup := map[string]string{
+		"CONTROL_PLANE_TUNNEL_ID":     envTunnelID,
+		"CONTROL_PLANE_API_KEY":       "control-key",
+		"LOG_FORMAT":                  "struct-text",
+		"MCP_SERVER_URL":              "https://mcp.example",
+		"HARPOON_HOSTS_INCLUDE_REGEX": "[",
+	}
+
+	_, err := Load(nil, func(key string) (string, bool) {
+		val, ok := lookup[key]
+		return val, ok
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid host regex")
+	}
+}
+
 func TestLoadRejectsHarpoonMaxResponseBytesTooHigh(t *testing.T) {
 	lookup := map[string]string{
 		"CONTROL_PLANE_TUNNEL_ID":    envTunnelID,

@@ -13,6 +13,7 @@ import (
 	"go.uber.org/fx"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/harpoon/hostbus"
 	"go.openai.org/api/tunnel-client/pkg/health"
 	"go.openai.org/api/tunnel-client/pkg/httpguard"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
@@ -21,8 +22,8 @@ import (
 // Module wires the harpoon MCP server.
 var Module = fx.Module(
 	"harpoon",
-	fx.Provide(newHarpoonService, newHarpoonGuardedMux),
-	fx.Invoke(registerAdditionalTransport),
+	fx.Provide(newHarpoonService, newHarpoonGuardedMux, newHostBusSubscriber, newHostBus),
+	fx.Invoke(registerAdditionalTransport, startHostRegistration),
 )
 
 // TargetRegistrar allows programmatic target registration during startup.
@@ -61,7 +62,11 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 	if p.Config == nil {
 		return harpoonOutputs{}, errors.New("harpoon: config is required")
 	}
-	registry, err := NewRegistry(p.Config.AllowPlaintextHTTP, convertTargets(p.Config.Targets))
+	logger := p.Logger
+	if logger == nil {
+		return harpoonOutputs{}, errors.New("harpoon: logger is required")
+	}
+	registry, err := NewRegistry(logger, p.Config.AllowPlaintextHTTP, convertTargets(p.Config.Targets))
 	if err != nil {
 		return harpoonOutputs{}, err
 	}
@@ -72,10 +77,6 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 		if err := registrar(registry); err != nil {
 			return harpoonOutputs{}, err
 		}
-	}
-	logger := p.Logger
-	if logger == nil {
-		logger = slog.Default()
 	}
 	buffer := NewCallBuffer()
 	server, err := NewServer(p.Config, registry, buffer, logger)
@@ -148,6 +149,10 @@ func newHarpoonGuardedMux(p guardedMuxParams) httpguard.GuardedMux {
 	)
 }
 
+func newHostBusSubscriber() hostBusSubscriberOut {
+	return hostBusSubscriberOut{Subscriber: make(chan hostbus.URLBundle, 16)}
+}
+
 func registerAdditionalTransport(p additionalTransportParams) error {
 	if p.Config == nil || p.Server == nil {
 		return nil
@@ -205,6 +210,7 @@ func convertTargets(targets []config.HarpoonTarget) []Target {
 		out = append(out, Target{
 			Label:       target.Label,
 			Description: target.Description,
+			Source:      "config",
 			BaseURL:     target.BaseURL,
 		})
 	}

@@ -97,6 +97,25 @@
   - Env: `HARPOON_CAPTURE_PAYLOADS`
   - Default: `false`
   - Behavior: stores request/response payloads in the Harpoon admin UI call history.
+- **Private host auto-registration filters**
+  - Flag (repeatable): `--harpoon-hosts-include-suffix`
+  - Env: `HARPOON_HOSTS_INCLUDE_SUFFIX` (semicolon- or newline-delimited list)
+  - Default: empty
+  - Behavior: treat matching host suffixes as private for auto-registration.
+- **Private host regex filters**
+  - Flag (repeatable): `--harpoon-hosts-include-regex`
+  - Env: `HARPOON_HOSTS_INCLUDE_REGEX` (semicolon- or newline-delimited list)
+  - Default: empty
+  - Behavior: treat matching hostnames as private for auto-registration (case-insensitive).
+- **Include loopback hosts**
+  - Flag: `--harpoon-hosts-include-loopback`
+  - Env: `HARPOON_HOSTS_INCLUDE_LOOPBACK`
+  - Default: `true`
+- **Include private IPs**
+  - Flag: `--harpoon-hosts-include-private`
+  - Env: `HARPOON_HOSTS_INCLUDE_PRIVATE`
+  - Default: `true`
+  - Behavior: includes RFC1918 IPv4 plus IPv6 ULA (fc00::/7).
 
 ## Logging
 

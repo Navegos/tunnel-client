@@ -3,8 +3,8 @@ package harpoon
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
-	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -16,13 +16,16 @@ const defaultRegistryLimit = 10000
 
 // Target describes a registered outbound HTTP target.
 type Target struct {
-	Label       string
-	Description string
-	BaseURL     *url.URL
+	Label           string
+	Description     string
+	Source          string
+	InclusionReason string
+	BaseURL         *url.URL
 }
 
 // Registry stores allowed targets keyed by label.
 type Registry struct {
+	logger         *slog.Logger
 	allowPlaintext bool
 	limit          int
 	mu             sync.RWMutex
@@ -31,16 +34,20 @@ type Registry struct {
 }
 
 // NewRegistry constructs a registry seeded with the provided targets and a default limit.
-func NewRegistry(allowPlaintext bool, targets []Target) (*Registry, error) {
-	return NewRegistryWithLimit(allowPlaintext, targets, defaultRegistryLimit)
+func NewRegistry(logger *slog.Logger, allowPlaintext bool, targets []Target) (*Registry, error) {
+	return NewRegistryWithLimit(logger, allowPlaintext, targets, defaultRegistryLimit)
 }
 
 // NewRegistryWithLimit constructs a registry with a maximum number of targets.
-func NewRegistryWithLimit(allowPlaintext bool, targets []Target, limit int) (*Registry, error) {
+func NewRegistryWithLimit(logger *slog.Logger, allowPlaintext bool, targets []Target, limit int) (*Registry, error) {
+	if logger == nil {
+		return nil, errors.New("harpoon: logger is required")
+	}
 	if limit <= 0 {
 		return nil, errors.New("harpoon: registry limit must be positive")
 	}
 	registry := &Registry{
+		logger:         logger,
 		allowPlaintext: allowPlaintext,
 		limit:          limit,
 		targets:        make(map[string]Target, len(targets)),
@@ -72,33 +79,30 @@ func (r *Registry) RegisterTarget(target Target) error {
 	if target.BaseURL.Scheme == "" || target.BaseURL.Host == "" {
 		return fmt.Errorf("harpoon: target %q base URL must include scheme and host", label)
 	}
-	if target.BaseURL.Fragment != "" || target.BaseURL.RawFragment != "" {
-		return fmt.Errorf("harpoon: target %q base URL must not include fragments", label)
-	}
-	if target.BaseURL.RawQuery != "" {
-		return fmt.Errorf("harpoon: target %q base URL must not include query parameters", label)
-	}
 	if !r.allowPlaintext && !isHTTPS(target.BaseURL) {
 		return fmt.Errorf("harpoon: target %q base URL must use https", label)
 	}
-	if target.BaseURL.Path != "" && !strings.HasPrefix(target.BaseURL.Path, "/") {
+	escapedPath := target.BaseURL.EscapedPath()
+	if escapedPath != "" && !strings.HasPrefix(escapedPath, "/") {
 		return fmt.Errorf("harpoon: target %q base URL path must be absolute", label)
 	}
 	if hasTraversal(target.BaseURL.Path) {
 		return fmt.Errorf("harpoon: target %q base URL contains invalid path segments", label)
 	}
-	normalized := *target.BaseURL
-	if normalized.Path == "" {
-		normalized.Path = "/"
+
+	normalized, err := normalizeURL(target.BaseURL)
+	if err != nil {
+		return fmt.Errorf("harpoon: target %q base URL is invalid: %w", label, err)
 	}
-	normalized.Path = path.Clean(normalized.Path)
-	normalized.RawPath = ""
 
 	cleanTarget := Target{
-		Label:       label,
-		Description: strings.TrimSpace(target.Description),
-		BaseURL:     &normalized,
+		Label:           label,
+		Description:     strings.TrimSpace(target.Description),
+		Source:          strings.TrimSpace(target.Source),
+		InclusionReason: strings.TrimSpace(target.InclusionReason),
+		BaseURL:         normalized,
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.targets[label]; exists {
@@ -136,26 +140,21 @@ func (r *Registry) Lookup(label string) (Target, bool) {
 	return target, ok
 }
 
-// Resolve joins the provided path with the target's base URL and validates the result.
-func (r *Registry) Resolve(label, rawPath string) (*url.URL, error) {
+// Resolve returns the target URL for a label.
+func (r *Registry) Resolve(label string) (*url.URL, error) {
 	target, ok := r.Lookup(label)
 	if !ok {
 		return nil, fmt.Errorf("unknown target label %q", label)
 	}
-	resolved, err := joinTargetPath(target.BaseURL, rawPath)
-	if err != nil {
-		return nil, err
+	if target.BaseURL == nil {
+		return nil, fmt.Errorf("target %q has empty url", label)
 	}
-	if !sameOrigin(resolved, target.BaseURL) {
-		return nil, fmt.Errorf("path resolves outside target %q", label)
-	}
-	if !hasPathPrefix(target.BaseURL.Path, resolved.Path) {
-		return nil, fmt.Errorf("path resolves outside target %q", label)
-	}
-	return resolved, nil
+	resolved := *target.BaseURL
+	return &resolved, nil
 }
 
-// AllowsURL reports whether the URL is within any registered target.
+// AllowsURL reports whether the URL exactly matches any registered target after
+// normalization.
 func (r *Registry) AllowsURL(candidate *url.URL) bool {
 	if r == nil || candidate == nil {
 		return false
@@ -169,87 +168,55 @@ func (r *Registry) AllowsURL(candidate *url.URL) bool {
 	if hasTraversal(candidate.Path) {
 		return false
 	}
+	candidateKey, err := normalizedURLKey(candidate)
+	if err != nil {
+		return false
+	}
+
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, target := range r.targets {
-		if sameOrigin(candidate, target.BaseURL) && hasPathPrefix(target.BaseURL.Path, candidate.Path) {
+		if target.BaseURL == nil {
+			continue
+		}
+		targetKey, keyErr := normalizedURLKey(target.BaseURL)
+		if keyErr != nil {
+			continue
+		}
+		if candidateKey == targetKey {
 			return true
 		}
 	}
 	return false
 }
 
-func sameOrigin(a, b *url.URL) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
-}
-
 func isHTTPS(u *url.URL) bool {
 	return strings.EqualFold(u.Scheme, "https")
 }
 
-func hasPathPrefix(basePath, fullPath string) bool {
-	if basePath == "" {
-		basePath = "/"
+func normalizeURL(raw *url.URL) (*url.URL, error) {
+	if raw == nil {
+		return nil, errors.New("url is required")
 	}
-	if !strings.HasPrefix(basePath, "/") {
-		basePath = "/" + basePath
+	if raw.Scheme == "" || raw.Host == "" {
+		return nil, errors.New("url must include scheme and host")
 	}
-	if fullPath == "" {
-		fullPath = "/"
-	}
-	basePath = path.Clean(basePath)
-	fullPath = path.Clean(fullPath)
-	if basePath == "/" {
-		return strings.HasPrefix(fullPath, "/")
-	}
-	if fullPath == basePath {
-		return true
-	}
-	return strings.HasPrefix(fullPath, basePath+"/")
+
+	normalized := *raw
+	normalized.Scheme = strings.ToLower(normalized.Scheme)
+	normalized.Host = strings.ToLower(normalized.Host)
+	return &normalized, nil
 }
 
-func joinTargetPath(base *url.URL, rawPath string) (*url.URL, error) {
-	if base == nil {
-		return nil, errors.New("base URL is required")
-	}
-	parsed, err := url.Parse(rawPath)
+func normalizedURLKey(raw *url.URL) (string, error) {
+	normalized, err := normalizeURL(raw)
 	if err != nil {
-		return nil, fmt.Errorf("invalid path: %w", err)
+		return "", err
 	}
-	if parsed.Scheme != "" || parsed.Host != "" {
-		return nil, errors.New("path must be relative")
+	if normalized.Scheme == "" || normalized.Host == "" {
+		return "", errors.New("url must include scheme and host")
 	}
-	if parsed.Fragment != "" {
-		return nil, errors.New("path must not include fragments")
-	}
-	if hasTraversal(parsed.Path) {
-		return nil, errors.New("path contains traversal segments")
-	}
-
-	basePath := base.Path
-	if basePath == "" {
-		basePath = "/"
-	}
-	basePath = path.Clean(basePath)
-	cleanRel := path.Clean("/" + strings.TrimPrefix(parsed.Path, "/"))
-	if cleanRel == "/" && strings.TrimSpace(parsed.Path) == "" {
-		cleanRel = ""
-	}
-
-	joinedPath := basePath
-	if cleanRel != "" {
-		joinedPath = path.Clean(strings.TrimSuffix(basePath, "/") + "/" + strings.TrimPrefix(cleanRel, "/"))
-	}
-
-	resolved := *base
-	resolved.Path = joinedPath
-	resolved.RawPath = ""
-	resolved.RawQuery = parsed.RawQuery
-	resolved.Fragment = ""
-	return &resolved, nil
+	return normalized.String(), nil
 }
 
 func hasTraversal(rawPath string) bool {

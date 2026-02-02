@@ -145,6 +145,15 @@ type HarpoonConfig struct {
 	AdditionalTransports []HarpoonTransportKind
 	Targets              []HarpoonTarget
 	CapturePayloads      bool
+	HostClassifier       HarpoonHostClassifierConfig
+}
+
+// HarpoonHostClassifierConfig controls which hosts are treated as private.
+type HarpoonHostClassifierConfig struct {
+	IncludeSuffix   []string
+	IncludeRegex    []string
+	IncludeLoopback bool
+	IncludePrivate  bool
 }
 
 // HarpoonTarget describes a configured harpoon target.
@@ -237,6 +246,10 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.Int("harpoon-max-redirects", DefaultHarpoonMaxRedirects, "Maximum number of harpoon redirects (env.HARPOON_MAX_REDIRECTS)")
 	fs.StringArray("harpoon-additional-transport", nil, "Additional harpoon transports (http-streamable) (env.HARPOON_ADDITIONAL_TRANSPORTS)")
 	fs.Bool("harpoon-capture-payloads", false, "Capture request/response payloads for the Harpoon admin UI (debug only). (env.HARPOON_CAPTURE_PAYLOADS)")
+	fs.StringArray("harpoon-hosts-include-suffix", nil, "Host suffixes treated as private for Harpoon auto-registration (repeatable) (env.HARPOON_HOSTS_INCLUDE_SUFFIX)")
+	fs.StringArray("harpoon-hosts-include-regex", nil, "Host regex patterns treated as private for Harpoon auto-registration (repeatable) (env.HARPOON_HOSTS_INCLUDE_REGEX)")
+	fs.Bool("harpoon-hosts-include-loopback", true, "Treat loopback hosts as private for Harpoon auto-registration (env.HARPOON_HOSTS_INCLUDE_LOOPBACK)")
+	fs.Bool("harpoon-hosts-include-private", true, "Treat private IPs as private for Harpoon auto-registration (env.HARPOON_HOSTS_INCLUDE_PRIVATE)")
 
 	if f := fs.Lookup("log.file"); f != nil {
 		f.DefValue = "stdout"
@@ -812,6 +825,25 @@ func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
+	hostsIncludeSuffix, err := buildHarpoonHostIncludeList(fs, lookupEnv, "harpoon-hosts-include-suffix", "HARPOON_HOSTS_INCLUDE_SUFFIX")
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
+	hostsIncludeRegex, err := buildHarpoonHostIncludeList(fs, lookupEnv, "harpoon-hosts-include-regex", "HARPOON_HOSTS_INCLUDE_REGEX")
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
+	hostsIncludeLoopback, err := getBoolWithDefault(fs, lookupEnv, "harpoon-hosts-include-loopback", "HARPOON_HOSTS_INCLUDE_LOOPBACK", true)
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
+	hostsIncludePrivate, err := getBoolWithDefault(fs, lookupEnv, "harpoon-hosts-include-private", "HARPOON_HOSTS_INCLUDE_PRIVATE", true)
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
+	if err := validateHarpoonHostRegexes(hostsIncludeRegex); err != nil {
+		return HarpoonConfig{}, err
+	}
 	return HarpoonConfig{
 		AllowPlaintextHTTP:   allowPlaintext,
 		MaxResponseBytes:     maxResponseBytes,
@@ -819,7 +851,51 @@ func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)
 		Targets:              targets,
 		AdditionalTransports: additional,
 		CapturePayloads:      capturePayloads,
+		HostClassifier: HarpoonHostClassifierConfig{
+			IncludeSuffix:   hostsIncludeSuffix,
+			IncludeRegex:    hostsIncludeRegex,
+			IncludeLoopback: hostsIncludeLoopback,
+			IncludePrivate:  hostsIncludePrivate,
+		},
 	}, nil
+}
+
+func buildHarpoonHostIncludeList(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName, envName string) ([]string, error) {
+	var raw []string
+	if flag := fs.Lookup(flagName); flag != nil && flag.Changed {
+		values, err := fs.GetStringArray(flagName)
+		if err != nil {
+			return nil, fmt.Errorf("invalid value for --%s: %w", flagName, err)
+		}
+		raw = append(raw, values...)
+	} else if envVal, ok := lookupEnv(envName); ok && envVal != "" {
+		raw = splitTargetList(envVal)
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out, nil
+}
+
+func validateHarpoonHostRegexes(values []string) error {
+	for _, raw := range values {
+		pattern := strings.TrimSpace(raw)
+		if pattern == "" {
+			continue
+		}
+		if _, err := regexp.Compile("(?i:" + pattern + ")"); err != nil {
+			return fmt.Errorf("invalid harpoon host regex %q: %w", raw, err)
+		}
+	}
+	return nil
 }
 
 func buildHarpoonTargets(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), allowPlaintext bool) ([]HarpoonTarget, error) {
@@ -973,6 +1049,24 @@ func getBool(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName,
 		return val, nil
 	}
 	return false, nil
+}
+
+func getBoolWithDefault(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName, envName string, defaultValue bool) (bool, error) {
+	if flag := fs.Lookup(flagName); flag != nil && flag.Changed {
+		val, err := strconv.ParseBool(flag.Value.String())
+		if err != nil {
+			return false, fmt.Errorf("parse --%s: %w", flagName, err)
+		}
+		return val, nil
+	}
+	if envVal, ok := lookupEnv(envName); ok && envVal != "" {
+		val, err := strconv.ParseBool(envVal)
+		if err != nil {
+			return false, fmt.Errorf("parse %s: %w", envName, err)
+		}
+		return val, nil
+	}
+	return defaultValue, nil
 }
 
 func parseCommandArgv(raw string) ([]string, error) {

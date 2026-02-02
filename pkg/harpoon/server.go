@@ -53,7 +53,6 @@ type Server struct {
 
 type callTargetRequest struct {
 	Label            string            `json:"label" jsonschema:"minLength=1,maxLength=64,pattern=^[a-z0-9][a-z0-9_-]{0\\,63}$,description=Allowlisted target label"`
-	Path             string            `json:"path,omitempty" jsonschema:"pattern=^[^#]*$,description=Relative path to append to the target base URL"`
 	Method           string            `json:"method" jsonschema:"enum=GET,enum=POST,enum=PUT,description=HTTP method for the outbound request"`
 	Headers          map[string]string `json:"headers,omitempty" jsonschema:"description=HTTP headers to include in the request"`
 	Body             string            `json:"body,omitempty" jsonschema:"description=Request body as a raw string"`
@@ -274,9 +273,9 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 		return nil, newToolError(label, "invalid method")
 	}
 
-	resolved, err := s.registry.Resolve(label, params.Path)
+	resolved, err := s.registry.Resolve(label)
 	if err != nil {
-		return nil, newToolError(label, "invalid path")
+		return nil, newToolError(label, "unknown target")
 	}
 
 	timeout, err := normalizeTimeout(params.TimeoutMS)
@@ -410,6 +409,13 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 		return nil, newToolError(label, "response exceeds size limit")
 	}
 
+	rewriter := newURLRewriter(s.registry.Targets())
+	transformedHeaders, _ := transformHeaders(resp.Header, rewriter)
+	transformedBody, bodyTransformed := transformJSONBody(body, rewriter)
+	if !bodyTransformed {
+		transformedBody = body
+	}
+
 	logger.InfoContext(ctx, "harpoon request completed",
 		slog.String("label", label),
 		slog.String("url", resp.Request.URL.String()),
@@ -430,12 +436,18 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 		startedAt:    start,
 		params:       params,
 		responseBody: body,
+		responseBodyTransformed: func() []byte {
+			if bodyTransformed {
+				return transformedBody
+			}
+			return nil
+		}(),
 	})
 
 	return &callTargetResponse{
 		StatusCode: resp.StatusCode,
-		Headers:    resp.Header,
-		BodyBase64: base64.StdEncoding.EncodeToString(body),
+		Headers:    transformedHeaders,
+		BodyBase64: base64.StdEncoding.EncodeToString(transformedBody),
 		BodySize:   len(body),
 		Truncated:  false,
 	}, nil
@@ -695,16 +707,17 @@ func jsonNumber(value int) json.Number {
 }
 
 type callRecordInput struct {
-	label        string
-	url          string
-	method       string
-	status       int
-	reqBytes     int
-	respBytes    int
-	errorMsg     string
-	startedAt    time.Time
-	params       callTargetRequest
-	responseBody []byte
+	label                   string
+	url                     string
+	method                  string
+	status                  int
+	reqBytes                int
+	respBytes               int
+	errorMsg                string
+	startedAt               time.Time
+	params                  callTargetRequest
+	responseBody            []byte
+	responseBodyTransformed []byte
 }
 
 func (s *Server) recordCall(input callRecordInput) {
@@ -728,6 +741,9 @@ func (s *Server) recordCall(input callRecordInput) {
 			bodyText, bodyIsBase64 := formatResponseBody(input.responseBody)
 			entry.ResponseBody = bodyText
 			entry.BodyIsBase64 = bodyIsBase64
+		}
+		if len(input.responseBodyTransformed) > 0 {
+			entry.ResponseBodyTransformed = string(input.responseBodyTransformed)
 		}
 	}
 	s.callBuffer.RecordCall(entry)

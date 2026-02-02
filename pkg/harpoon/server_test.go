@@ -62,7 +62,6 @@ func TestCallTargetSupportsMethods(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut} {
 		resp, err := client.callTarget(context.Background(), callTargetRequest{
 			Label:  "svc",
-			Path:   "/",
 			Method: method,
 		})
 		require.NoError(t, err)
@@ -85,7 +84,6 @@ func TestCallTargetRejectsInvalidMethod(t *testing.T) {
 
 	_, err := client.callTarget(context.Background(), callTargetRequest{
 		Label:  "svc",
-		Path:   "/",
 		Method: "DELETE",
 	})
 	require.Error(t, err)
@@ -106,7 +104,6 @@ func TestCallTargetValidatesTimeouts(t *testing.T) {
 	tooShort := 50
 	_, err := client.callTarget(context.Background(), callTargetRequest{
 		Label:     "svc",
-		Path:      "/",
 		Method:    http.MethodGet,
 		TimeoutMS: &tooShort,
 	})
@@ -115,7 +112,6 @@ func TestCallTargetValidatesTimeouts(t *testing.T) {
 	tooLong := 130000
 	_, err = client.callTarget(context.Background(), callTargetRequest{
 		Label:     "svc",
-		Path:      "/",
 		Method:    http.MethodGet,
 		TimeoutMS: &tooLong,
 	})
@@ -143,7 +139,6 @@ func TestCallTargetEnforcesSizeLimits(t *testing.T) {
 
 	_, err := client.callTarget(context.Background(), callTargetRequest{
 		Label:  "svc",
-		Path:   "/",
 		Method: http.MethodGet,
 	})
 	require.Error(t, err)
@@ -153,7 +148,6 @@ func TestCallTargetEnforcesSizeLimits(t *testing.T) {
 	body := strings.Repeat("b", 20)
 	_, err = client.callTarget(context.Background(), callTargetRequest{
 		Label:  "svc",
-		Path:   "/",
 		Method: http.MethodPost,
 		Body:   body,
 	})
@@ -178,14 +172,13 @@ func TestCallTargetRedirectHandling(t *testing.T) {
 		MaxRedirects:       5,
 		Targets: []config.HarpoonTarget{
 			{Label: "primary", BaseURL: mustParseURL(t, primary.URL)},
-			{Label: "second", BaseURL: mustParseURL(t, second.URL)},
+			{Label: "second", BaseURL: mustParseURL(t, second.URL+"/ok")},
 		},
 	}
 	client := newTestServer(t, cfg)
 
 	resp, err := client.callTarget(context.Background(), callTargetRequest{
 		Label:  "primary",
-		Path:   "/start",
 		Method: http.MethodGet,
 	})
 	require.NoError(t, err)
@@ -214,7 +207,6 @@ func TestCallTargetRedirectHandling(t *testing.T) {
 
 	_, err = client.callTarget(context.Background(), callTargetRequest{
 		Label:  "primary",
-		Path:   "/start",
 		Method: http.MethodGet,
 	})
 	require.Error(t, err)
@@ -238,14 +230,13 @@ func TestCallTargetRedirectLimit(t *testing.T) {
 	maxRedirects := 1
 	_, err := client.callTarget(context.Background(), callTargetRequest{
 		Label:        "loop",
-		Path:         "/",
 		Method:       http.MethodGet,
 		MaxRedirects: &maxRedirects,
 	})
 	require.Error(t, err)
 }
 
-func TestIntegrationRedirectTruncationAndPathJoin(t *testing.T) {
+func TestIntegrationRedirectTruncationWithExactTargets(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -264,27 +255,20 @@ func TestIntegrationRedirectTruncationAndPathJoin(t *testing.T) {
 		AllowPlaintextHTTP: true,
 		MaxResponseBytes:   10,
 		MaxRedirects:       5,
-		Targets: []config.HarpoonTarget{{
-			Label:   "svc",
-			BaseURL: mustParseURL(t, server.URL+"/api"),
-		}},
+		Targets: []config.HarpoonTarget{
+			{Label: "svc-start", BaseURL: mustParseURL(t, server.URL+"/api/start")},
+			{Label: "svc-large", BaseURL: mustParseURL(t, server.URL+"/api/large")},
+		},
 	}
 	client := newTestServer(t, cfg)
 
 	_, err := client.callTarget(context.Background(), callTargetRequest{
-		Label:  "svc",
-		Path:   "start",
+		Label:  "svc-start",
 		Method: http.MethodGet,
 	})
 	require.Error(t, err)
 	require.Contains(t, paths, "/api/start")
-
-	_, err = client.callTarget(context.Background(), callTargetRequest{
-		Label:  "svc",
-		Path:   "../escape",
-		Method: http.MethodGet,
-	})
-	require.Error(t, err)
+	require.Contains(t, paths, "/api/large")
 }
 
 func TestCallTargetPayloadCaptureDisabled(t *testing.T) {
@@ -307,7 +291,6 @@ func TestCallTargetPayloadCaptureDisabled(t *testing.T) {
 
 	_, err := client.callTarget(context.Background(), callTargetRequest{
 		Label:  "svc",
-		Path:   "/",
 		Method: http.MethodPost,
 		Body:   `{"hello":"world"}`,
 	})
@@ -340,7 +323,6 @@ func TestCallTargetPayloadCaptureEnabled(t *testing.T) {
 
 	_, err := client.callTarget(context.Background(), callTargetRequest{
 		Label:  "svc",
-		Path:   "/",
 		Method: http.MethodPost,
 		Body:   `{"hello":"world"}`,
 	})
@@ -356,7 +338,7 @@ func TestCallTargetPayloadCaptureEnabled(t *testing.T) {
 func newTestServer(t *testing.T, cfg *config.HarpoonConfig) *Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	registry, err := NewRegistry(cfg.AllowPlaintextHTTP, convertTargets(cfg.Targets))
+	registry, err := NewRegistry(logger, cfg.AllowPlaintextHTTP, convertTargets(cfg.Targets))
 	require.NoError(t, err)
 	buffer := NewCallBuffer()
 	server, err := NewServer(cfg, registry, buffer, logger)

@@ -102,7 +102,7 @@ func registerRoutes(p routeParams) error {
 	gmux.HandleFunc("/api/logs", handleLogsJSON(p.Buffer))
 	gmux.HandleFunc("/api/logs/stream", handleLogsStream(p.Buffer, streamCtx))
 	gmux.HandleFunc("/api/harpoon/status", handleHarpoonStatus(p.HarpoonReg, p.HarpoonConfig))
-	gmux.HandleFunc("/api/harpoon/targets", handleHarpoonTargets(p.HarpoonReg, p.HarpoonConfig))
+	gmux.HandleFunc("/api/harpoon/targets", handleHarpoonTargets(p.HarpoonReg))
 	gmux.HandleFunc("/api/harpoon/calls", handleHarpoonCalls(p.HarpoonBuffer, p.HarpoonConfig))
 	gmux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

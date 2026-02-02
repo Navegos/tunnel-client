@@ -21,6 +21,9 @@
   const labelFilterEl = $("harpoonLabelFilter");
   const errEl = $("harpoonErr");
   const refreshBtn = $("harpoonRefresh");
+  const policyAllowPlaintextEl = $("harpoonPolicyAllowPlaintext");
+  const policyMaxResponseEl = $("harpoonPolicyMaxResponseBytes");
+  const policyMaxRedirectsEl = $("harpoonPolicyMaxRedirects");
 
   if (!statusBadge || !captureBadge || !labelFilterEl || !callsEl) return;
 
@@ -28,6 +31,8 @@
   let poller = null;
   let captureEnabled = false;
   let availableLabels = [];
+  const openCalls = new Set();
+  const responseView = new Map();
 
   function setBadge(el, kind, text) {
     el.className = "badge " + kind;
@@ -73,7 +78,7 @@
     if (!targets || targets.length === 0) {
       const row = document.createElement("tr");
       const cell = document.createElement("td");
-      cell.colSpan = 4;
+      cell.colSpan = 3;
       cell.className = "muted";
       cell.textContent = "No targets configured.";
       row.appendChild(cell);
@@ -92,17 +97,28 @@
         "</td>" +
         "<td>" +
         (t.description || "—") +
-        "</td>" +
-        "<td class='mono small'>" +
-        "allow_plaintext=" +
-        String(!!t.allow_plaintext_http) +
-        "<br/>max_response_bytes=" +
-        formatBytes(t.max_response_bytes) +
-        "<br/>max_redirects=" +
-        formatBytes(t.max_redirects) +
+        (t.source ? "<div class='muted small'>source: " + t.source + "</div>" : "") +
+        (t.inclusion_reason
+          ? "<div class='muted small'>inclusion_reason: " +
+            t.inclusion_reason +
+            "</div>"
+          : "") +
         "</td>";
       targetsEl.appendChild(row);
     });
+  }
+
+  function renderPolicy(status) {
+    if (policyAllowPlaintextEl) {
+      policyAllowPlaintextEl.textContent = String(!!status.allow_plaintext_http);
+    }
+    if (policyMaxResponseEl) {
+      policyMaxResponseEl.textContent = formatBytes(status.max_response_bytes);
+    }
+    if (policyMaxRedirectsEl) {
+      policyMaxRedirectsEl.textContent =
+        status.max_redirects == null ? "—" : String(status.max_redirects);
+    }
   }
 
   function renderCalls(calls) {
@@ -116,6 +132,7 @@
     }
 
     calls.forEach((call) => {
+      const key = callKey(call);
       const wrapper = document.createElement("div");
       wrapper.className = "harpoon-call";
 
@@ -147,7 +164,9 @@
 
       const details = document.createElement("div");
       details.className = "harpoon-call-details";
-      details.style.display = "none";
+      const isOpen = openCalls.has(key);
+      details.style.display = isOpen ? "block" : "none";
+      toggle.textContent = isOpen ? "–" : "+";
 
       if (!captureEnabled) {
         const note = document.createElement("div");
@@ -169,14 +188,38 @@
         const respBlock = document.createElement("div");
         respBlock.className = "harpoon-payload";
         const respTitle = document.createElement("div");
-        respTitle.className = "muted small";
+        respTitle.className = "muted small harpoon-response-title";
         respTitle.textContent = "Response body";
+        const respToggle = document.createElement("button");
+        respToggle.className = "harpoon-toggle-view";
+        const hasTransformed = !!call.response_body_transformed;
+        const showTransformed = hasTransformed
+          ? responseView.get(key) !== false
+          : false;
+        if (hasTransformed) {
+          respToggle.textContent = showTransformed
+            ? "Show original"
+            : "Show transformed";
+          respToggle.addEventListener("click", () => {
+            responseView.set(key, !showTransformed);
+            renderCalls(calls);
+          });
+        } else {
+          respToggle.textContent = "Original";
+          respToggle.disabled = true;
+        }
+        respTitle.appendChild(respToggle);
         const respPre = document.createElement("pre");
         respPre.className = "pre mono";
-        respPre.textContent = formatPayload(
-          call.response_body,
-          call.body_is_base64
-        );
+        const respBody = hasTransformed
+          ? showTransformed
+            ? call.response_body_transformed
+            : call.response_body
+          : call.response_body;
+        const respIsBase64 = hasTransformed && showTransformed
+          ? false
+          : call.body_is_base64;
+        respPre.textContent = formatPayload(respBody, respIsBase64);
         respBlock.appendChild(respTitle);
         respBlock.appendChild(respPre);
 
@@ -188,12 +231,27 @@
         const open = details.style.display === "block";
         details.style.display = open ? "none" : "block";
         toggle.textContent = open ? "+" : "–";
+        if (open) {
+          openCalls.delete(key);
+        } else {
+          openCalls.add(key);
+        }
       });
 
       wrapper.appendChild(header);
       wrapper.appendChild(details);
       callsEl.appendChild(wrapper);
     });
+  }
+
+  function callKey(call) {
+    return [
+      call.timestamp || "",
+      call.label || "",
+      call.method || "",
+      call.url || "",
+      call.status || "",
+    ].join("|");
   }
 
   function buildCell(text, cls) {
@@ -230,9 +288,13 @@
       setBadge(
         captureBadge,
         captureEnabled ? "warn" : "ok",
-        "Capture: " + (captureEnabled ? "on" : "off")
+        "Capture req/resp payloads: " + (captureEnabled ? "on" : "off")
       );
+      captureBadge.title = captureEnabled
+        ? "Request/response bodies are stored in call history (debug only)."
+        : "Request/response bodies are not stored. Enable with --harpoon-capture-payloads.";
       setDisabledState(!status.enabled, status.reason);
+      renderPolicy(status);
       return status.enabled;
     } catch (e) {
       setBadge(statusBadge, "bad", "Harpoon: error");

@@ -47,8 +47,7 @@ func TestHarpoonInMemoryToolCall(t *testing.T) {
 					"name": "call_target",
 					"arguments": {
 						"label": "abc",
-						"path": "/",
-						"method": "GET",
+												"method": "GET",
 						"headers": {}
 					},
 					"_meta": {
@@ -89,7 +88,7 @@ func TestHarpoonInMemoryToolCall(t *testing.T) {
 						{
 							Label:       "redirected",
 							Description: "Redirect destination",
-							BaseURL:     mustParseURL(t, redirectTargetURL),
+							BaseURL:     mustParseURL(t, redirectTargetURL+"/"),
 						},
 					},
 				}
@@ -107,8 +106,7 @@ func TestHarpoonInMemoryToolCall(t *testing.T) {
 					"name": "call_target",
 					"arguments": {
 						"label": "abc",
-						"path": "/",
-						"method": "GET",
+												"method": "GET",
 						"headers": {}
 					},
 					"_meta": {
@@ -196,8 +194,7 @@ func TestHarpoonInMemoryToolCall(t *testing.T) {
 					"name": "call_target",
 					"arguments": {
 						"label": "abc",
-						"path": "/",
-						"method": "GET",
+												"method": "GET",
 						"headers": {}
 					},
 					"_meta": {
@@ -379,11 +376,6 @@ func TestHarpoonToolSchemas(t *testing.T) {
 				"description": "HTTP method for the outbound request",
 				"enum": ["GET", "POST", "PUT"]
 			},
-			"path": {
-				"type": "string",
-				"description": "Relative path to append to the target base URL",
-				"pattern": "^[^#]*$"
-			},
 			"headers": {
 				"type": "object",
 				"description": "HTTP headers to include in the request",
@@ -509,7 +501,7 @@ func setupHarpoon(t *testing.T, cfg config.HarpoonConfig) (*Server, *mcp.InMemor
 	t.Helper()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	registry, err := NewRegistry(cfg.AllowPlaintextHTTP, convertTargets(cfg.Targets))
+	registry, err := NewRegistry(logger, cfg.AllowPlaintextHTTP, convertTargets(cfg.Targets))
 	require.NoError(t, err)
 	buffer := NewCallBuffer()
 	server, err := NewServer(&cfg, registry, buffer, logger)
