@@ -14,6 +14,7 @@ import (
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	tcmetrics "go.openai.org/api/tunnel-client/pkg/metrics"
 	tctransport "go.openai.org/api/tunnel-client/pkg/transport"
+	"go.openai.org/api/tunnel-client/pkg/types"
 	"go.openai.org/api/tunnel-client/pkg/version"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -26,8 +27,9 @@ var Module = fx.Module(
 	"mcpclient",
 	fx.Provide(
 		newMcpClient,
-		newStdioCommandTransportProvider,
-		newStdioRuntimeInfoProvider,
+		newStdioCommandTransportFactoryProvider,
+		newChannelStdioRuntimeInfoProvider,
+		newChannelTransportFactory,
 		fx.Annotate(newStreamableTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
 		fx.Annotate(newInjectableTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
 		fx.Annotate(newStdioTransportProvider, fx.ResultTags(`group:"mcp_transport_providers"`)),
@@ -40,11 +42,11 @@ const defaultProbeTimeout = 2 * time.Second
 type clientParams struct {
 	fx.In
 
-	Config             *config.MCPConfig
-	Logging            *config.LoggingConfig
-	Logger             *slog.Logger
-	MeterProvider      *sdkmetric.MeterProvider
-	TransportProviders []TransportProvider `group:"mcp_transport_providers"`
+	Config           *config.MCPConfig
+	Logging          *config.LoggingConfig
+	Logger           *slog.Logger
+	MeterProvider    *sdkmetric.MeterProvider
+	TransportFactory *ChannelTransportFactory
 }
 
 type clientOutputs struct {
@@ -69,41 +71,42 @@ func newMcpClient(p clientParams) (clientOutputs, error) {
 	if p.Config == nil {
 		return clientOutputs{}, fmt.Errorf("mcpclient: mcp config is required")
 	}
-	if p.Logger == nil || p.Logging == nil || p.MeterProvider == nil {
-		return clientOutputs{}, fmt.Errorf("mcpclient: logger, logging config, and meter provider are required")
+	if p.Logger == nil || p.Logging == nil || p.MeterProvider == nil || p.TransportFactory == nil {
+		return clientOutputs{}, fmt.Errorf("mcpclient: logger, logging config, meter provider, and transport factory are required")
 	}
 
 	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "tunnel-client", Version: version.Version}, nil)
-
-	httpClient := &http.Client{Transport: buildMcpHTTPTransport(p.Logger, p.Logging, p.MeterProvider)}
-	transportKind := config.MCPTransportHTTPStreamable
-	if p.Config != nil && p.Config.TransportKind != "" {
-		transportKind = p.Config.TransportKind
-	}
-	provider, err := selectTransportProvider(transportKind, p.TransportProviders)
-	if err != nil {
-		return clientOutputs{}, err
-	}
-	mcpTransport, err := provider.Build(TransportBuildParams{
-		Config:     p.Config,
-		HTTPClient: httpClient,
-	})
-	if err != nil {
-		return clientOutputs{}, err
-	}
-
-	if p.Logging.HTTPRawUnsafe && p.Logging.Level <= slog.LevelDebug {
-		logger := p.Logger.With(tclog.FieldComponent, tclog.ComponentMcpClient, "transport", "raw_http")
-		mcpTransport = &mcp.LoggingTransport{
-			Transport: mcpTransport,
-			Writer:    slogWriter{logger: logger},
+	mainBinding := p.Config.MainChannelBinding()
+	if mainBinding == nil {
+		legacyBinding := config.MCPChannelBinding{
+			Channel:       types.DefaultChannel,
+			TransportKind: p.Config.TransportKind,
+			ServerURL:     p.Config.ServerURL,
+			Command:       p.Config.Command,
+			CommandArgs:   p.Config.CommandArgs,
 		}
+		mainBinding = &legacyBinding
+	}
+	transportKind := mainBinding.TransportKind
+	if transportKind == "" {
+		transportKind = config.MCPTransportHTTPStreamable
+		mainBinding.TransportKind = transportKind
+	}
+	if transportKind == config.MCPTransportHTTPStreamable && mainBinding.ServerURL == nil {
+		return clientOutputs{}, fmt.Errorf("mcpclient: main channel binding is required")
+	}
+	if transportKind == config.MCPTransportStdio && len(mainBinding.CommandArgs) == 0 {
+		return clientOutputs{}, fmt.Errorf("mcpclient: main channel binding is required")
+	}
+	mcpTransport, err := p.TransportFactory.Build(*mainBinding)
+	if err != nil {
+		return clientOutputs{}, err
 	}
 
 	return clientOutputs{
 		Client:     mcpClient,
 		Transport:  mcpTransport,
-		HTTPClient: httpClient,
+		HTTPClient: p.TransportFactory.HTTPClient(),
 	}, nil
 }
 

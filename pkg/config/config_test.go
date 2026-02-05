@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+
+	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
 const (
@@ -665,7 +667,7 @@ func TestLoadRequiresMCPServerURL(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error when MCP server URL missing")
 	}
-	if !strings.Contains(err.Error(), "MCP server URL or command is required") {
+	if !strings.Contains(err.Error(), "main channel is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -700,11 +702,11 @@ func TestLoadUsesMCPCommand(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsMCPCommandAndServerURL(t *testing.T) {
+func TestLoadRejectsMCPCommandAndServerURLSameChannel(t *testing.T) {
 	args := []string{
 		"--control-plane.tunnel-id", flagTunnelID,
-		"--mcp.server-url", "https://flag-mcp",
-		"--mcp.command", "echo hello",
+		"--mcp.server-url", "channel=main,url=https://flag-mcp",
+		"--mcp.command", "channel=main,command=echo hello",
 	}
 	_, err := Load(args, func(key string) (string, bool) {
 		if key == "OPENAI_API_KEY" {
@@ -713,9 +715,140 @@ func TestLoadRejectsMCPCommandAndServerURL(t *testing.T) {
 		return "", false
 	})
 	if err == nil {
-		t.Fatalf("expected error when mcp.command and mcp.server-url are both set")
+		t.Fatalf("expected error when mcp.command and mcp.server-url target same channel")
 	}
-	if !strings.Contains(err.Error(), "mcp.command and mcp.server-url are mutually exclusive") {
+	if !strings.Contains(err.Error(), "duplicate channel") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAllowsMCPCommandAndServerURLDifferentChannels(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=main,url=https://flag-mcp",
+		"--mcp.command", "channel=tools,command=echo hello",
+	}
+	cfg, err := Load(args, func(key string) (string, bool) {
+		if key == "OPENAI_API_KEY" {
+			return "key", true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got := cfg.MCP.ChannelBindingFor(types.Channel("tools")); got == nil || got.TransportKind != MCPTransportStdio {
+		t.Fatalf("expected stdio binding for tools channel, got %v", got)
+	}
+	if got := cfg.MCP.ChannelBindingFor(types.DefaultChannel); got == nil || got.ServerURL == nil {
+		t.Fatalf("expected main channel binding to include server url, got %v", got)
+	}
+}
+
+func TestLoadParsesChannelQualifiedEntries(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=main,url=https://flag-mcp",
+		"--mcp.command", "channel=tools,command=echo hello",
+	}
+	cfg, err := Load(args, func(key string) (string, bool) {
+		if key == "OPENAI_API_KEY" {
+			return "key", true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	mainBinding := cfg.MCP.ChannelBindingFor(types.DefaultChannel)
+	if mainBinding == nil || mainBinding.ServerURL == nil {
+		t.Fatalf("expected main binding URL, got %v", mainBinding)
+	}
+	toolsBinding := cfg.MCP.ChannelBindingFor(types.Channel("tools"))
+	if toolsBinding == nil || toolsBinding.TransportKind != MCPTransportStdio {
+		t.Fatalf("expected tools stdio binding, got %v", toolsBinding)
+	}
+}
+
+func TestLoadParsesEnvMCPEntries(t *testing.T) {
+	cfg, err := Load(nil, func(key string) (string, bool) {
+		switch key {
+		case "OPENAI_API_KEY":
+			return "key", true
+		case "CONTROL_PLANE_TUNNEL_ID":
+			return envTunnelID, true
+		case "LOG_FORMAT":
+			return "struct-text", true
+		case "MCP_SERVER_URL":
+			return "https://main.example.com/mcp;channel=foo,url=https://foo.example.com/mcp", true
+		default:
+			return "", false
+		}
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got := cfg.MCP.ChannelBindingFor(types.DefaultChannel); got == nil || got.ServerURL == nil {
+		t.Fatalf("expected main binding from env, got %v", got)
+	}
+	if got := cfg.MCP.ChannelBindingFor(types.Channel("foo")); got == nil || got.ServerURL == nil {
+		t.Fatalf("expected foo binding from env, got %v", got)
+	}
+}
+
+func TestLoadRejectsHarpoonChannelBinding(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=harpoon,url=https://flag-mcp",
+	}
+	_, err := Load(args, func(key string) (string, bool) {
+		if key == "OPENAI_API_KEY" {
+			return "key", true
+		}
+		return "", false
+	})
+	if err == nil {
+		t.Fatalf("expected error when configuring harpoon channel binding")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsHarpoonCommandBinding(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.command", "channel=harpoon,command=echo hello",
+	}
+	_, err := Load(args, func(key string) (string, bool) {
+		if key == "OPENAI_API_KEY" {
+			return "key", true
+		}
+		return "", false
+	})
+	if err == nil {
+		t.Fatalf("expected error when configuring harpoon channel command binding")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsMissingMainChannel(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=tools,url=https://flag-mcp",
+	}
+	_, err := Load(args, func(key string) (string, bool) {
+		if key == "OPENAI_API_KEY" {
+			return "key", true
+		}
+		return "", false
+	})
+	if err == nil {
+		t.Fatalf("expected error when main channel binding missing")
+	}
+	if !strings.Contains(err.Error(), "main channel is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

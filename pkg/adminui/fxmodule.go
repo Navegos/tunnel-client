@@ -48,7 +48,7 @@ type routeParams struct {
 	OAuthState    *oauth.DiscoveryState
 	HarpoonBuffer *harpoon.CallBuffer
 	HarpoonReg    *harpoon.Registry
-	StdioInfo     mcpclient.StdioRuntimeInfoProvider `optional:"true"`
+	StdioInfo     mcpclient.ChannelStdioRuntimeInfoProvider `optional:"true"`
 }
 
 type statusResponse struct {
@@ -147,17 +147,17 @@ func buildStatus(p routeParams) statusResponse {
 			out.ControlPlanePollTimeout = p.ControlPlane.PollTimeout.String()
 		}
 	}
-	if p.MCPConfig != nil && p.MCPConfig.ServerURL != nil {
-		out.MCPServerURL = p.MCPConfig.ServerURL.String()
-	}
 	if p.MCPConfig != nil {
-		urls := oauth.BuildResourceMetadataURLs(p.MCPConfig.ServerURL)
-		out.MCPResourceMetadataURLs = make([]string, 0, len(urls))
-		for _, url := range urls {
-			if url == nil {
-				continue
+		if mainBinding := p.MCPConfig.MainChannelBinding(); mainBinding != nil && mainBinding.ServerURL != nil {
+			out.MCPServerURL = mainBinding.ServerURL.String()
+			urls := oauth.BuildResourceMetadataURLs(mainBinding.ServerURL)
+			out.MCPResourceMetadataURLs = make([]string, 0, len(urls))
+			for _, url := range urls {
+				if url == nil {
+					continue
+				}
+				out.MCPResourceMetadataURLs = append(out.MCPResourceMetadataURLs, url.String())
 			}
-			out.MCPResourceMetadataURLs = append(out.MCPResourceMetadataURLs, url.String())
 		}
 	}
 	out.Channels = BuildChannelStatuses(p.MCPConfig, p.HarpoonReg, p.StdioInfo)

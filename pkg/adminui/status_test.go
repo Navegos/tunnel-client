@@ -15,11 +15,15 @@ import (
 )
 
 type stubStdioRuntimeInfoProvider struct {
-	info mcpclient.StdioRuntimeInfo
+	info    mcpclient.StdioRuntimeInfo
+	channel types.Channel
 }
 
-func (s stubStdioRuntimeInfoProvider) StdioRuntimeInfo() mcpclient.StdioRuntimeInfo {
-	return s.info
+func (s stubStdioRuntimeInfoProvider) StdioRuntimeInfo(channel types.Channel) (mcpclient.StdioRuntimeInfo, bool) {
+	if s.channel.Canonical() != channel.Canonical() {
+		return mcpclient.StdioRuntimeInfo{}, false
+	}
+	return s.info, true
 }
 
 func TestBuildStatusIncludesChannels(t *testing.T) {
@@ -33,8 +37,17 @@ func TestBuildStatusIncludesChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	out := buildStatus(routeParams{
-		Buffer:     buffer,
-		MCPConfig:  &config.MCPConfig{ServerURL: serverURL},
+		Buffer: buffer,
+		MCPConfig: &config.MCPConfig{
+			ServerURL: serverURL,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     serverURL,
+				},
+			},
+		},
 		HarpoonReg: registry,
 	})
 
@@ -71,6 +84,14 @@ func TestBuildStatusIncludesStdioChannelDetails(t *testing.T) {
 			TransportKind: config.MCPTransportStdio,
 			Command:       "python /tmp/mcp.py --stdio",
 			CommandArgs:   []string{"python", "/tmp/mcp.py", "--stdio"},
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportStdio,
+					Command:       "python /tmp/mcp.py --stdio",
+					CommandArgs:   []string{"python", "/tmp/mcp.py", "--stdio"},
+				},
+			},
 		},
 		HarpoonReg: registry,
 		StdioInfo: stubStdioRuntimeInfoProvider{
@@ -78,6 +99,7 @@ func TestBuildStatusIncludesStdioChannelDetails(t *testing.T) {
 				PID:     4242,
 				Command: "python /tmp/mcp.py --stdio",
 			},
+			channel: types.DefaultChannel,
 		},
 	})
 

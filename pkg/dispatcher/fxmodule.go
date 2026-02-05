@@ -67,7 +67,7 @@ var Module = fx.Module(
 	"dispatcher",
 	fx.Provide(
 		newPolledCommandQueue,
-		fx.Annotate(newMainChannelBinding, fx.ResultTags(`group:"dispatcher_channel_bindings"`)),
+		newConfiguredChannelBindings,
 		fx.Annotate(newHarpoonChannelBinding, fx.ResultTags(`group:"dispatcher_channel_bindings"`)),
 		newProcessorChannelBindings,
 		dispatcherinternal.NewProcessor,
@@ -76,14 +76,46 @@ var Module = fx.Module(
 	fx.Invoke(startQueueListener),
 )
 
-func newMainChannelBinding(transport mcp.Transport) dispatcherChannelBinding {
-	return dispatcherChannelBinding{
-		Channel:       types.DefaultChannel,
-		Priority:      0,
-		Transport:     transport,
-		SupportsMCP:   true,
-		SupportsOAuth: true,
+type configuredChannelBindingsResult struct {
+	fx.Out
+
+	Bindings []dispatcherChannelBinding `group:"dispatcher_channel_bindings,flatten"`
+}
+
+func newConfiguredChannelBindings(cfg *config.MCPConfig, factory *mcpclient.ChannelTransportFactory) (configuredChannelBindingsResult, error) {
+	if cfg == nil {
+		return configuredChannelBindingsResult{}, fmt.Errorf("dispatcher: MCP config is required")
 	}
+	if factory == nil {
+		return configuredChannelBindingsResult{}, fmt.Errorf("dispatcher: channel transport factory is required")
+	}
+	channelBindings := cfg.ChannelBindings
+	if len(channelBindings) == 0 {
+		mainBinding := config.MCPChannelBinding{
+			Channel:       types.DefaultChannel,
+			TransportKind: cfg.TransportKind,
+			ServerURL:     cfg.ServerURL,
+			Command:       cfg.Command,
+			CommandArgs:   cfg.CommandArgs,
+		}
+		channelBindings = []config.MCPChannelBinding{mainBinding}
+	}
+	bindings := make([]dispatcherChannelBinding, 0, len(channelBindings))
+	for _, binding := range channelBindings {
+		transport, err := factory.Build(binding)
+		if err != nil {
+			return configuredChannelBindingsResult{}, err
+		}
+		channelName := binding.Channel.Canonical()
+		bindings = append(bindings, dispatcherChannelBinding{
+			Channel:       channelName,
+			Priority:      0,
+			Transport:     transport,
+			SupportsMCP:   true,
+			SupportsOAuth: channelName == types.DefaultChannel,
+		})
+	}
+	return configuredChannelBindingsResult{Bindings: bindings}, nil
 }
 
 type harpoonChannelBindingParams struct {

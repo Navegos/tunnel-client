@@ -25,13 +25,15 @@ func buildOAuthStatus(p routeParams) oauthStatusResponse {
 	}
 
 	if p.MCPConfig != nil {
-		urls := oauth.BuildResourceMetadataURLs(p.MCPConfig.ServerURL)
-		out.DiscoveryURLs = make([]string, 0, len(urls))
-		for _, u := range urls {
-			if u == nil {
-				continue
+		if mainBinding := p.MCPConfig.MainChannelBinding(); mainBinding != nil {
+			urls := oauth.BuildResourceMetadataURLs(mainBinding.ServerURL)
+			out.DiscoveryURLs = make([]string, 0, len(urls))
+			for _, u := range urls {
+				if u == nil {
+					continue
+				}
+				out.DiscoveryURLs = append(out.DiscoveryURLs, u.String())
 			}
-			out.DiscoveryURLs = append(out.DiscoveryURLs, u.String())
 		}
 	}
 

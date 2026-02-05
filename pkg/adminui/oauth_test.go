@@ -10,6 +10,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
+	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
 func TestBuildOAuthStatusWithAttempts(t *testing.T) {
@@ -31,7 +32,16 @@ func TestBuildOAuthStatusWithAttempts(t *testing.T) {
 	}, nil, nil, []string{"https://example.com/override"})
 
 	out := buildOAuthStatus(routeParams{
-		MCPConfig:  &config.MCPConfig{ServerURL: serverURL},
+		MCPConfig: &config.MCPConfig{
+			ServerURL: serverURL,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     serverURL,
+				},
+			},
+		},
 		OAuthState: state,
 	})
 
@@ -52,7 +62,16 @@ func TestBuildOAuthStatusPendingUsesConfigURLs(t *testing.T) {
 	state := oauth.NewDiscoveryState()
 
 	out := buildOAuthStatus(routeParams{
-		MCPConfig:  &config.MCPConfig{ServerURL: serverURL},
+		MCPConfig: &config.MCPConfig{
+			ServerURL: serverURL,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     serverURL,
+				},
+			},
+		},
 		OAuthState: state,
 	})
 
@@ -78,7 +97,16 @@ func TestBuildOAuthStatusErrorIncludesAttempts(t *testing.T) {
 	}, errors.New("boom"), nil, []string{"https://example.com/override"})
 
 	out := buildOAuthStatus(routeParams{
-		MCPConfig:  &config.MCPConfig{ServerURL: serverURL},
+		MCPConfig: &config.MCPConfig{
+			ServerURL: serverURL,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     serverURL,
+				},
+			},
+		},
 		OAuthState: state,
 	})
 

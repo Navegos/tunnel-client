@@ -326,6 +326,15 @@ func (h *Harness) startClient(t testing.TB) {
 		t.Fatalf("unsupported MCP transport kind: %s", transportKind)
 		return
 	}
+	if len(cfg.MCP.ChannelBindings) == 0 {
+		cfg.MCP.ChannelBindings = []config.MCPChannelBinding{{
+			Channel:       types.DefaultChannel,
+			TransportKind: cfg.MCP.TransportKind,
+			ServerURL:     cfg.MCP.ServerURL,
+			Command:       cfg.MCP.Command,
+			CommandArgs:   cfg.MCP.CommandArgs,
+		}}
+	}
 	logWriter := h.logWriter
 	if logWriter == nil {
 		logWriter = io.Discard

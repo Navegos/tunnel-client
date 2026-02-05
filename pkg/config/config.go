@@ -133,8 +133,37 @@ type MCPConfig struct {
 	Command               string
 	CommandArgs           []string
 	TransportKind         MCPTransportKind
+	ChannelBindings       []MCPChannelBinding
 	ConnectionMaxTTL      time.Duration
 	MaxConcurrentRequests int
+}
+
+// MCPChannelBinding maps a channel to its MCP transport configuration.
+type MCPChannelBinding struct {
+	Channel       types.Channel
+	TransportKind MCPTransportKind
+	ServerURL     *url.URL
+	Command       string
+	CommandArgs   []string
+}
+
+// ChannelBindingFor returns the configured binding for the provided channel.
+func (c *MCPConfig) ChannelBindingFor(channel types.Channel) *MCPChannelBinding {
+	if c == nil {
+		return nil
+	}
+	canonical := channel.Canonical()
+	for i := range c.ChannelBindings {
+		if c.ChannelBindings[i].Channel.Canonical() == canonical {
+			return &c.ChannelBindings[i]
+		}
+	}
+	return nil
+}
+
+// MainChannelBinding returns the binding for the main channel, if configured.
+func (c *MCPConfig) MainChannelBinding() *MCPChannelBinding {
+	return c.ChannelBindingFor(types.DefaultChannel)
 }
 
 // HarpoonConfig captures configuration for the embedded harpoon MCP server.
@@ -236,8 +265,8 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.Bool("allow-remote-ui", false, "Allow remote access to the embedded web UI and log endpoints (env.ALLOW_REMOTE_UI)")
 	fs.Bool("open-web-ui", false, "Open the embedded web UI in your default browser on startup (env.OPEN_WEB_UI)")
 	fs.String("pid.file", "", "File to write the tunnel-client process ID to (env.PID_FILE)")
-	fs.String("mcp.server-url", "", "Target MCP server URL (env.MCP_SERVER_URL)")
-	fs.String("mcp.command", "", "Command to launch an MCP server over stdio (env.MCP_COMMAND)")
+	fs.StringArray("mcp.server-url", nil, "Target MCP server URL (repeatable; format url=...,channel=...) (env.MCP_SERVER_URL)")
+	fs.StringArray("mcp.command", nil, "Command to launch an MCP server over stdio (repeatable; format command=...,channel=...) (env.MCP_COMMAND)")
 	fs.Duration("mcp.connection-max-ttl", defaultMCPConnectionMaxTTL, "Maximum lifetime of MCP transport connections (env.MCP_CONNECTION_MAX_TTL)")
 	fs.Int("mcp.max-concurrent-requests", defaultMCPMaxConcurrentRequests, "Maximum number of concurrent requests to the MCP server (env.MCP_MAX_CONCURRENT_REQUESTS)")
 	fs.StringArray("harpoon-target", nil, "Harpoon target mapping (format 'label=...,url=...,desc=...') (env.HARPOON_TARGETS)")
@@ -710,39 +739,18 @@ func resolveAllowRemoteUI(fs *pflag.FlagSet, lookupEnv func(string) (string, boo
 }
 
 func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (MCPConfig, error) {
-	commandRaw := firstSet(
-		getValue(fs, "mcp.command"),
-		envOrDefault(lookupEnv, "MCP_COMMAND", ""),
-	)
-	serverURLRaw := firstSet(
-		getValue(fs, "mcp.server-url"),
-		envOrDefault(lookupEnv, "MCP_SERVER_URL", ""),
-	)
-	if commandRaw != "" && serverURLRaw != "" {
-		return MCPConfig{}, errors.New("mcp.command and mcp.server-url are mutually exclusive; choose one")
+	commandEntries, err := resolveMCPEntries(fs, lookupEnv, "mcp.command", "MCP_COMMAND")
+	if err != nil {
+		return MCPConfig{}, err
+	}
+	serverEntries, err := resolveMCPEntries(fs, lookupEnv, "mcp.server-url", "MCP_SERVER_URL")
+	if err != nil {
+		return MCPConfig{}, err
 	}
 
-	transportKind := MCPTransportHTTPStreamable
-	var (
-		serverURL   *url.URL
-		commandArgs []string
-	)
-	switch {
-	case commandRaw != "":
-		transportKind = MCPTransportStdio
-		parsed, err := parseCommandArgv(commandRaw)
-		if err != nil {
-			return MCPConfig{}, fmt.Errorf("invalid mcp.command: %w", err)
-		}
-		commandArgs = parsed
-	case serverURLRaw != "":
-		parsed, err := parseURL(serverURLRaw)
-		if err != nil {
-			return MCPConfig{}, fmt.Errorf("invalid mcp.server-url: %w", err)
-		}
-		serverURL = parsed
-	default:
-		return MCPConfig{}, errors.New("MCP server URL or command is required; set --mcp.server-url, MCP_SERVER_URL, or --mcp.command")
+	bindings, err := parseMCPChannelBindings(commandEntries, serverEntries)
+	if err != nil {
+		return MCPConfig{}, err
 	}
 
 	ttlRaw := firstSet(
@@ -778,14 +786,200 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (M
 		maxConcurrent = val
 	}
 
-	return MCPConfig{
-		ServerURL:             serverURL,
-		Command:               commandRaw,
-		CommandArgs:           commandArgs,
-		TransportKind:         transportKind,
+	cfg := MCPConfig{
+		ChannelBindings:       bindings,
 		ConnectionMaxTTL:      ttl,
 		MaxConcurrentRequests: maxConcurrent,
-	}, nil
+	}
+	if mainBinding := cfg.MainChannelBinding(); mainBinding != nil {
+		cfg.ServerURL = mainBinding.ServerURL
+		cfg.Command = mainBinding.Command
+		cfg.CommandArgs = mainBinding.CommandArgs
+		cfg.TransportKind = mainBinding.TransportKind
+	}
+	return cfg, nil
+}
+
+func resolveMCPEntries(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName, envKey string) ([]string, error) {
+	if flag := fs.Lookup(flagName); flag != nil && flag.Changed {
+		values, err := fs.GetStringArray(flagName)
+		if err != nil {
+			return nil, fmt.Errorf("invalid value for --%s: %w", flagName, err)
+		}
+		return values, nil
+	}
+	if envVal, ok := lookupEnv(envKey); ok && envVal != "" {
+		return splitMCPEnvEntries(envVal), nil
+	}
+	return nil, nil
+}
+
+func splitMCPEnvEntries(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ';' || r == '\n'
+	})
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if trimmed := strings.TrimSpace(field); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func parseMCPChannelBindings(commandEntries, serverEntries []string) ([]MCPChannelBinding, error) {
+	bindings := make([]MCPChannelBinding, 0, len(commandEntries)+len(serverEntries))
+	seen := make(map[types.Channel]MCPChannelBinding, len(commandEntries)+len(serverEntries))
+
+	addBinding := func(binding MCPChannelBinding, source string) error {
+		canonical := binding.Channel.Canonical()
+		if canonical == "" {
+			return fmt.Errorf("mcp config: %s channel name is empty", source)
+		}
+		if canonical == types.ChannelHarpoon {
+			return fmt.Errorf("mcp config: %s channel %q is reserved", source, canonical)
+		}
+		if existing, ok := seen[canonical]; ok {
+			return fmt.Errorf(
+				"mcp config: duplicate channel %q from %s (%s already configured)",
+				canonical,
+				source,
+				existing.TransportKind,
+			)
+		}
+		seen[canonical] = binding
+		bindings = append(bindings, binding)
+		return nil
+	}
+
+	for _, entry := range serverEntries {
+		binding, err := parseMCPBindingEntry(entry, MCPTransportHTTPStreamable)
+		if err != nil {
+			return nil, err
+		}
+		if err := addBinding(binding, "mcp.server-url"); err != nil {
+			return nil, err
+		}
+	}
+	for _, entry := range commandEntries {
+		binding, err := parseMCPBindingEntry(entry, MCPTransportStdio)
+		if err != nil {
+			return nil, err
+		}
+		if err := addBinding(binding, "mcp.command"); err != nil {
+			return nil, err
+		}
+	}
+
+	if _, ok := seen[types.DefaultChannel]; !ok {
+		return nil, errors.New("main channel is required")
+	}
+	return bindings, nil
+}
+
+func parseMCPBindingEntry(entry string, kind MCPTransportKind) (MCPChannelBinding, error) {
+	if strings.TrimSpace(entry) == "" {
+		return MCPChannelBinding{}, fmt.Errorf("mcp config: %s entry is empty", kind)
+	}
+
+	if !isQualifiedMCPEntry(entry) {
+		channel, err := types.NormalizeChannel("")
+		if err != nil {
+			return MCPChannelBinding{}, err
+		}
+		return buildMCPBinding(channel, kind, entry)
+	}
+
+	parts := strings.Split(entry, ",")
+	values := make(map[string]string, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		kv := strings.SplitN(trimmed, "=", 2)
+		if len(kv) != 2 {
+			return MCPChannelBinding{}, fmt.Errorf("mcp config: invalid entry %q (expected key=value)", entry)
+		}
+		key := strings.TrimSpace(kv[0])
+		value := strings.TrimSpace(kv[1])
+		if key == "" || value == "" {
+			return MCPChannelBinding{}, fmt.Errorf("mcp config: invalid entry %q (empty %s)", entry, key)
+		}
+		values[key] = value
+	}
+
+	allowedKeys := map[string]bool{
+		"channel": true,
+	}
+	switch kind {
+	case MCPTransportHTTPStreamable:
+		allowedKeys["url"] = true
+	case MCPTransportStdio:
+		allowedKeys["command"] = true
+	}
+	for key := range values {
+		if !allowedKeys[key] {
+			return MCPChannelBinding{}, fmt.Errorf("mcp config: unsupported key %q in entry %q", key, entry)
+		}
+	}
+
+	channelName := values["channel"]
+	channel, err := types.NormalizeChannel(channelName)
+	if err != nil {
+		return MCPChannelBinding{}, err
+	}
+
+	switch kind {
+	case MCPTransportHTTPStreamable:
+		rawURL, ok := values["url"]
+		if !ok {
+			return MCPChannelBinding{}, fmt.Errorf("mcp config: server-url entry %q missing url", entry)
+		}
+		return buildMCPBinding(channel, kind, rawURL)
+	case MCPTransportStdio:
+		rawCommand, ok := values["command"]
+		if !ok {
+			return MCPChannelBinding{}, fmt.Errorf("mcp config: command entry %q missing command", entry)
+		}
+		return buildMCPBinding(channel, kind, rawCommand)
+	default:
+		return MCPChannelBinding{}, fmt.Errorf("mcp config: unsupported transport %q", kind)
+	}
+}
+
+func buildMCPBinding(channel types.Channel, kind MCPTransportKind, rawValue string) (MCPChannelBinding, error) {
+	binding := MCPChannelBinding{
+		Channel:       channel,
+		TransportKind: kind,
+	}
+
+	switch kind {
+	case MCPTransportHTTPStreamable:
+		parsed, err := parseURL(rawValue)
+		if err != nil {
+			return MCPChannelBinding{}, fmt.Errorf("invalid mcp.server-url: %w", err)
+		}
+		binding.ServerURL = parsed
+	case MCPTransportStdio:
+		parsed, err := parseCommandArgv(rawValue)
+		if err != nil {
+			return MCPChannelBinding{}, fmt.Errorf("invalid mcp.command: %w", err)
+		}
+		binding.Command = rawValue
+		binding.CommandArgs = parsed
+	default:
+		return MCPChannelBinding{}, fmt.Errorf("unsupported mcp transport %q", kind)
+	}
+
+	return binding, nil
+}
+
+func isQualifiedMCPEntry(entry string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(entry))
+	return strings.HasPrefix(trimmed, "url=") ||
+		strings.HasPrefix(trimmed, "command=") ||
+		strings.HasPrefix(trimmed, "channel=")
 }
 
 func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (HarpoonConfig, error) {

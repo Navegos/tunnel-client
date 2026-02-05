@@ -20,12 +20,12 @@ func newInjectableTransportProvider(p injectableProviderParams) TransportProvide
 type stdioProviderParams struct {
 	fx.In
 
-	CommandTransport *stdioCommandTransport
+	CommandFactory *stdioCommandTransportFactory
 }
 
 func newStdioTransportProvider(p stdioProviderParams) TransportProvider {
 	return stdioTransportProvider{
-		commandTransport: p.CommandTransport,
+		commandFactory: p.CommandFactory,
 	}
 }
 
@@ -37,10 +37,13 @@ type stdioCommandTransportParams struct {
 	Logger     *slog.Logger
 }
 
-func newStdioCommandTransportProvider(p stdioCommandTransportParams) *stdioCommandTransport {
-	return newStdioCommandTransport(p.Logger, p.Lifecycle, p.Shutdowner)
+func newStdioCommandTransportFactoryProvider(p stdioCommandTransportParams) *stdioCommandTransportFactory {
+	return newStdioCommandTransportFactory(p.Logger, p.Lifecycle, p.Shutdowner)
 }
 
-func newStdioRuntimeInfoProvider(transport *stdioCommandTransport) StdioRuntimeInfoProvider {
-	return transport
+func newChannelStdioRuntimeInfoProvider(factory *stdioCommandTransportFactory) ChannelStdioRuntimeInfoProvider {
+	if factory == nil {
+		return nil
+	}
+	return factory
 }

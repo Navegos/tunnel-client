@@ -2,6 +2,7 @@ package adminui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -41,15 +42,26 @@ type ChannelStatusDetail struct {
 func BuildChannelStatuses(
 	mcpCfg *config.MCPConfig,
 	harpoonRegistry *harpoon.Registry,
-	stdioInfoProvider mcpclient.StdioRuntimeInfoProvider,
+	stdioInfoProvider mcpclient.ChannelStdioRuntimeInfoProvider,
 ) []ChannelStatus {
-	return []ChannelStatus{
-		buildMainChannelStatus(mcpCfg, stdioInfoProvider),
-		buildHarpoonChannelStatus(harpoonRegistry),
+	statuses := make([]ChannelStatus, 0, 4)
+	if mcpCfg == nil || len(mcpCfg.ChannelBindings) == 0 {
+		statuses = append(statuses, buildFallbackMainChannelStatus(mcpCfg, stdioInfoProvider))
+	} else {
+		entries := make([]ChannelStatus, 0, len(mcpCfg.ChannelBindings))
+		for _, binding := range mcpCfg.ChannelBindings {
+			entries = append(entries, buildChannelStatus(binding, stdioInfoProvider))
+		}
+		sort.SliceStable(entries, func(i, j int) bool {
+			return entries[i].Name < entries[j].Name
+		})
+		statuses = append(statuses, entries...)
 	}
+	statuses = append(statuses, buildHarpoonChannelStatus(harpoonRegistry))
+	return statuses
 }
 
-func buildMainChannelStatus(mcpCfg *config.MCPConfig, stdioInfoProvider mcpclient.StdioRuntimeInfoProvider) ChannelStatus {
+func buildFallbackMainChannelStatus(mcpCfg *config.MCPConfig, stdioInfoProvider mcpclient.ChannelStdioRuntimeInfoProvider) ChannelStatus {
 	status := ChannelStatus{
 		Name:       types.DefaultChannel.String(),
 		ServerKind: MCPServerKindExternal,
@@ -90,15 +102,7 @@ func buildMainChannelStatus(mcpCfg *config.MCPConfig, stdioInfoProvider mcpclien
 			command = strings.Join(mcpCfg.CommandArgs, " ")
 		}
 		pid := ""
-		if stdioInfoProvider != nil {
-			info := stdioInfoProvider.StdioRuntimeInfo()
-			if strings.TrimSpace(info.Command) != "" {
-				command = info.Command
-			}
-			if info.PID > 0 {
-				pid = strconv.Itoa(info.PID)
-			}
-		}
+		pid, command = fillStdioRuntimeDetails(stdioInfoProvider, types.DefaultChannel, pid, command)
 		if pid == "" {
 			pid = "—"
 		}
@@ -123,6 +127,84 @@ func buildMainChannelStatus(mcpCfg *config.MCPConfig, stdioInfoProvider mcpclien
 	}
 
 	return status
+}
+
+func buildChannelStatus(binding config.MCPChannelBinding, stdioInfoProvider mcpclient.ChannelStdioRuntimeInfoProvider) ChannelStatus {
+	status := ChannelStatus{
+		Name:       binding.Channel.Canonical().String(),
+		ServerKind: MCPServerKindExternal,
+	}
+	transportKind := binding.TransportKind
+	if transportKind == "" {
+		transportKind = config.MCPTransportHTTPStreamable
+	}
+
+	switch transportKind {
+	case config.MCPTransportHTTPStreamable:
+		status.TransportKind = config.MCPTransportHTTPStreamable
+		if binding.ServerURL == nil {
+			status.Reason = "mcp.server-url not configured"
+			return status
+		}
+		status.Details = []ChannelStatusDetail{
+			{
+				Key:   "address",
+				Value: binding.ServerURL.String(),
+			},
+		}
+		status.Enabled = true
+	case config.MCPTransportStdio:
+		status.TransportKind = config.MCPTransportStdio
+		if binding.Command == "" && len(binding.CommandArgs) == 0 {
+			status.Reason = "mcp.command not configured"
+			return status
+		}
+		command := strings.TrimSpace(binding.Command)
+		if command == "" {
+			command = strings.Join(binding.CommandArgs, " ")
+		}
+		pid := ""
+		pid, command = fillStdioRuntimeDetails(stdioInfoProvider, binding.Channel, pid, command)
+		if pid == "" {
+			pid = "—"
+		}
+		status.Details = []ChannelStatusDetail{
+			{
+				Key:   "pid",
+				Value: pid,
+			},
+			{
+				Key:   "command",
+				Value: command,
+			},
+		}
+		status.Enabled = true
+	case config.MCPTransportInMemory:
+		status.TransportKind = config.MCPTransportInMemory
+		status.ServerKind = MCPServerKindBuiltin
+		status.Enabled = true
+	default:
+		status.TransportKind = mcpTransportUnknown
+		status.Reason = fmt.Sprintf("unsupported mcp transport %q", transportKind)
+	}
+	return status
+}
+
+func fillStdioRuntimeDetails(provider mcpclient.ChannelStdioRuntimeInfoProvider, channel types.Channel, pid string, command string) (string, string) {
+	if provider == nil {
+		return pid, command
+	}
+	info, ok := provider.StdioRuntimeInfo(channel)
+	if !ok {
+		return pid, command
+	}
+	if strings.TrimSpace(info.Command) != "" {
+		command = info.Command
+	}
+	if info.PID > 0 {
+		pid = strconv.Itoa(info.PID)
+	}
+	return pid, command
 }
 
 func buildHarpoonChannelStatus(registry *harpoon.Registry) ChannelStatus {

@@ -3,7 +3,7 @@
 `tunnel-client` can be configured via CLI flags or environment variables.
 
 - **Precedence**: flags > environment variables > defaults.
-- **Requirement**: you must provide a control-plane API key, a tunnel ID, and either an MCP server URL or an MCP command.
+- **Requirement**: you must provide a control-plane API key, a tunnel ID, and a `main` MCP channel binding (via `--mcp.server-url` or `--mcp.command`).
 
 ## Commands
 
@@ -45,15 +45,24 @@
 ## MCP server
 
 - **Server URL**
-  - Flag: `--mcp.server-url`
+  - Flag (repeatable): `--mcp.server-url`
   - Env: `MCP_SERVER_URL`
-  - Required: yes (unless `--mcp.command` is provided)
+  - Required: yes for the `main` channel (unless `--mcp.command` supplies `main`)
+  - Legacy form: `--mcp.server-url=https://main.example.com/mcp` (defaults to `main`)
+  - Channel-qualified form: `--mcp.server-url="channel=foo,url=https://foo.example.com/mcp"`
 - **Command (stdio transport)**
-  - Flag: `--mcp.command`
+  - Flag (repeatable): `--mcp.command`
   - Env: `MCP_COMMAND`
-  - Required: yes (unless `--mcp.server-url` is provided)
+  - Required: yes for the `main` channel (unless `--mcp.server-url` supplies `main`)
+  - Legacy form: `--mcp.command="npx -y @org/main-mcp"` (defaults to `main`)
+  - Channel-qualified form: `--mcp.command="channel=bar,command=npx -y @org/bar-mcp"`
   - Behavior: spawns the command once and uses the child process stdin/stdout for MCP frames
   - Note: stdio transport does not support MCP sessions
+- **Multiple entries**
+  - Flags are repeatable; each entry can target a different channel.
+  - Environment variables accept semicolon- or newline-delimited entries.
+  - Configuring both `--mcp.server-url` and `--mcp.command` is allowed as long as they target **different** channels.
+  - If no `main` binding is configured, startup fails with `main channel is required`.
 - **Connection max TTL**
   - Flag: `--mcp.connection-max-ttl`
   - Env: `MCP_CONNECTION_MAX_TTL`
@@ -69,10 +78,11 @@
 
 ## Channels
 
-`tunnel-client` supports two logical channels:
+`tunnel-client` supports multiple logical channels:
 
-- `main`: always configured from the MCP settings above.
-- `harpoon`: enabled only when Harpoon has at least one registered target (see Harpoon config below).
+- `main`: required; configured from `--mcp.server-url` or `--mcp.command`.
+- `harpoon`: built-in and enabled only when Harpoon has at least one registered target (see Harpoon config below).
+- additional channels: configured via channel-qualified `--mcp.server-url` and/or `--mcp.command` entries.
 
 All response payloads posted to `/v1/tunnel/{tunnel_id}/response` include the resolved `channel` value.
 
@@ -233,4 +243,18 @@ export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
   --mcp.server-url=https://mcp.internal.example.com/mcp \
   --log.level=info \
   --log.format=json
+
+### Multi-channel MCP bindings
+
+```bash
+export CONTROL_PLANE_API_KEY="sk-..."
+export CONTROL_PLANE_TUNNEL_ID="tunnel_<abc>"
+
+./bin/tunnel-client run \
+  --mcp.server-url="channel=main,url=https://mcp.internal.example.com/mcp" \
+  --mcp.server-url="channel=analytics,url=https://analytics.internal.example.com/mcp" \
+  --mcp.command="channel=tools,command=npx -y @org/tools-mcp" \
+  --log.level=info \
+  --log.format=struct-text
+```
 ```

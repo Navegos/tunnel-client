@@ -18,6 +18,7 @@ type TransportProvider interface {
 // TransportBuildParams carries shared dependencies for transport construction.
 type TransportBuildParams struct {
 	Config     *config.MCPConfig
+	Binding    config.MCPChannelBinding
 	HTTPClient *http.Client
 }
 
@@ -32,11 +33,11 @@ func (streamableTransportProvider) Kind() config.MCPTransportKind {
 }
 
 func (streamableTransportProvider) Build(params TransportBuildParams) (mcp.Transport, error) {
-	if params.Config == nil || params.Config.ServerURL == nil {
+	if params.Binding.ServerURL == nil {
 		return nil, errors.New("mcpclient: server URL is required for http-streamable transport")
 	}
 	return &mcp.StreamableClientTransport{
-		Endpoint:   params.Config.ServerURL.String(),
+		Endpoint:   params.Binding.ServerURL.String(),
 		HTTPClient: params.HTTPClient,
 	}, nil
 }
@@ -57,7 +58,7 @@ func (p injectableTransportProvider) Build(TransportBuildParams) (mcp.Transport,
 }
 
 type stdioTransportProvider struct {
-	commandTransport *stdioCommandTransport
+	commandFactory *stdioCommandTransportFactory
 }
 
 func (p stdioTransportProvider) Kind() config.MCPTransportKind {
@@ -65,10 +66,17 @@ func (p stdioTransportProvider) Kind() config.MCPTransportKind {
 }
 
 func (p stdioTransportProvider) Build(params TransportBuildParams) (mcp.Transport, error) {
-	if p.commandTransport == nil {
+	if p.commandFactory == nil {
 		return nil, errors.New("mcpclient: stdio transport requires mcp.command")
 	}
-	transport, err := p.commandTransport.Transport(params.Config)
+	if len(params.Binding.CommandArgs) == 0 {
+		return nil, errors.New("mcpclient: stdio transport requires mcp.command")
+	}
+	commandConfig := &config.MCPConfig{
+		Command:     params.Binding.Command,
+		CommandArgs: params.Binding.CommandArgs,
+	}
+	transport, err := p.commandFactory.transportForChannel(params.Binding.Channel).Transport(commandConfig)
 	if err != nil {
 		return nil, err
 	}

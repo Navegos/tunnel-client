@@ -10,6 +10,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
+	"go.openai.org/api/tunnel-client/pkg/types"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
@@ -18,15 +19,20 @@ func TestNewMcpClient_DefaultTransport(t *testing.T) {
 		Config: &config.MCPConfig{
 			ServerURL:             mustParseURL(t, "https://example.invalid"),
 			MaxConcurrentRequests: 10,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     mustParseURL(t, "https://example.invalid"),
+				},
+			},
 		},
 		Logging: &config.LoggingConfig{
 			HTTPRawUnsafe: false,
 		},
-		Logger:        slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
-		MeterProvider: sdkmetric.NewMeterProvider(),
-		TransportProviders: []TransportProvider{
-			newStreamableTransportProvider(),
-		},
+		Logger:           slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		MeterProvider:    sdkmetric.NewMeterProvider(),
+		TransportFactory: newTestChannelTransportFactory(t, mustParseURL(t, "https://example.invalid"), &config.LoggingConfig{HTTPRawUnsafe: false}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))),
 	}
 	outputs, err := newMcpClient(params)
 	if err != nil {
@@ -50,16 +56,21 @@ func TestNewMcpClient_LoggingTransport(t *testing.T) {
 		Config: &config.MCPConfig{
 			ServerURL:             mustParseURL(t, "https://example.invalid"),
 			MaxConcurrentRequests: 10,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     mustParseURL(t, "https://example.invalid"),
+				},
+			},
 		},
 		Logging: &config.LoggingConfig{
 			HTTPRawUnsafe: true,
 			Level:         slog.LevelDebug,
 		},
-		Logger:        logger,
-		MeterProvider: sdkmetric.NewMeterProvider(),
-		TransportProviders: []TransportProvider{
-			newStreamableTransportProvider(),
-		},
+		Logger:           logger,
+		MeterProvider:    sdkmetric.NewMeterProvider(),
+		TransportFactory: newTestChannelTransportFactory(t, mustParseURL(t, "https://example.invalid"), &config.LoggingConfig{HTTPRawUnsafe: true, Level: slog.LevelDebug}, logger),
 	}
 	outputs, err := newMcpClient(params)
 	if err != nil {
@@ -105,16 +116,21 @@ func TestNewMcpClient_LoggingTransportRequiresDebugLevel(t *testing.T) {
 		Config: &config.MCPConfig{
 			ServerURL:             mustParseURL(t, "https://example.invalid"),
 			MaxConcurrentRequests: 10,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     mustParseURL(t, "https://example.invalid"),
+				},
+			},
 		},
 		Logging: &config.LoggingConfig{
 			HTTPRawUnsafe: true,
 			Level:         slog.LevelInfo,
 		},
-		Logger:        slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
-		MeterProvider: sdkmetric.NewMeterProvider(),
-		TransportProviders: []TransportProvider{
-			newStreamableTransportProvider(),
-		},
+		Logger:           slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		MeterProvider:    sdkmetric.NewMeterProvider(),
+		TransportFactory: newTestChannelTransportFactory(t, mustParseURL(t, "https://example.invalid"), &config.LoggingConfig{HTTPRawUnsafe: true, Level: slog.LevelInfo}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))),
 	}
 	outputs, err := newMcpClient(params)
 	if err != nil {
@@ -124,6 +140,33 @@ func TestNewMcpClient_LoggingTransportRequiresDebugLevel(t *testing.T) {
 	if _, ok := outputs.Transport.(*mcp.StreamableClientTransport); !ok {
 		t.Fatalf("expected raw transport to be streamable; got %T", outputs.Transport)
 	}
+}
+
+func newTestChannelTransportFactory(t *testing.T, serverURL *url.URL, logging *config.LoggingConfig, logger *slog.Logger) *ChannelTransportFactory {
+	t.Helper()
+	cfg := &config.MCPConfig{
+		ServerURL: serverURL,
+		ChannelBindings: []config.MCPChannelBinding{
+			{
+				Channel:       types.DefaultChannel,
+				TransportKind: config.MCPTransportHTTPStreamable,
+				ServerURL:     serverURL,
+			},
+		},
+	}
+	factory, err := newChannelTransportFactory(channelTransportFactoryParams{
+		Config:        cfg,
+		Logging:       logging,
+		Logger:        logger,
+		MeterProvider: sdkmetric.NewMeterProvider(),
+		TransportProviders: []TransportProvider{
+			newStreamableTransportProvider(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("newChannelTransportFactory returned error: %v", err)
+	}
+	return factory
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {
