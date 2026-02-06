@@ -293,7 +293,7 @@ func TestLoadRejectsInvalidControlPlaneAPIKeyFlag(t *testing.T) {
 }
 
 func TestLoadParsesHarpoonTargetsFromFlags(t *testing.T) {
-	args := []string{"--harpoon-target", "label=auth,url=https://example.com,desc=Auth server"}
+	args := []string{"--harpoon.target", "label=auth,url=https://example.com,desc=Auth server"}
 	lookup := map[string]string{
 		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
 		"CONTROL_PLANE_API_KEY":   "control-key",
@@ -323,7 +323,7 @@ func TestLoadParsesHarpoonTargetsFromFlags(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidHarpoonTargetLabel(t *testing.T) {
-	args := []string{"--harpoon-target", "label=Auth-Prod,url=https://example.com,desc=Auth server"}
+	args := []string{"--harpoon.target", "label=Auth-Prod,url=https://example.com,desc=Auth server"}
 	lookup := map[string]string{
 		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
 		"CONTROL_PLANE_API_KEY":   "control-key",
@@ -344,7 +344,7 @@ func TestLoadRejectsInvalidHarpoonTargetLabel(t *testing.T) {
 }
 
 func TestLoadParsesHarpoonAdditionalTransport(t *testing.T) {
-	args := []string{"--harpoon-additional-transport", "http-streamable"}
+	args := []string{"--harpoon.additional-transport", "http-streamable"}
 	lookup := map[string]string{
 		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
 		"CONTROL_PLANE_API_KEY":   "control-key",
@@ -365,7 +365,7 @@ func TestLoadParsesHarpoonAdditionalTransport(t *testing.T) {
 }
 
 func TestLoadParsesHarpoonCapturePayloads(t *testing.T) {
-	args := []string{"--harpoon-capture-payloads"}
+	args := []string{"--harpoon.capture-payloads"}
 	lookup := map[string]string{
 		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
 		"CONTROL_PLANE_API_KEY":   "control-key",
@@ -413,10 +413,10 @@ func TestLoadHarpoonHostClassifierDefaults(t *testing.T) {
 
 func TestLoadHarpoonHostClassifierFlags(t *testing.T) {
 	args := []string{
-		"--harpoon-hosts-include-suffix", "internal",
-		"--harpoon-hosts-include-regex", "^svc-.*",
-		"--harpoon-hosts-include-loopback=false",
-		"--harpoon-hosts-include-private=false",
+		"--harpoon.hosts-include-suffix", "internal",
+		"--harpoon.hosts-include-regex", "^svc-.*",
+		"--harpoon.hosts-include-loopback=false",
+		"--harpoon.hosts-include-private=false",
 	}
 	lookup := map[string]string{
 		"CONTROL_PLANE_TUNNEL_ID": envTunnelID,

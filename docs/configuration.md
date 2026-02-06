@@ -104,47 +104,47 @@ All response payloads posted to `/v1/tunnel/{tunnel_id}/response` include the re
 Harpoon’s channel (`harpoon`) is considered enabled only when at least one target is registered. If there are no targets, `harpoon` commands return `unsupported_channel`.
 
 - **Target mappings**
-  - Flag (repeatable): `--harpoon-target="label=auth,url=https://auth.example.com,desc=Auth server"`
+  - Flag (repeatable): `--harpoon.target="label=auth,url=https://auth.example.com,desc=Auth server"`
   - Env: `HARPOON_TARGETS` (semicolon- or newline-delimited list of the same `label=...,url=...,desc=...` entries)
 - **Allow plaintext HTTP**
-  - Flag: `--harpoon-allow-plaintext-http`
+  - Flag: `--harpoon.allow-plaintext-http`
   - Env: `HARPOON_ALLOW_PLAINTEXT_HTTP`
   - Default: `false`
 - **Max response bytes**
-  - Flag: `--harpoon-max-response-bytes`
+  - Flag: `--harpoon.max-response-bytes`
   - Env: `HARPOON_MAX_RESPONSE_BYTES`
   - Default: `102400`
   - Note: this is the upper ceiling for per-call overrides.
 - **Max redirects**
-  - Flag: `--harpoon-max-redirects`
+  - Flag: `--harpoon.max-redirects`
   - Env: `HARPOON_MAX_REDIRECTS`
   - Default: `5`
   - Note: this is the upper ceiling for per-call overrides.
 - **Additional transport (optional)**
-  - Flag: `--harpoon-additional-transport=http-streamable`
+  - Flag: `--harpoon.additional-transport=http-streamable`
   - Env: `HARPOON_ADDITIONAL_TRANSPORTS` (semicolon- or newline-delimited list)
   - Behavior: exposes the harpoon MCP server over the admin/health HTTP server at `GET/POST /harpoon/mcp` (loopback-only unless `--allow-remote-ui` is set).
 - **Capture payloads (debug only)**
-  - Flag: `--harpoon-capture-payloads`
+  - Flag: `--harpoon.capture-payloads`
   - Env: `HARPOON_CAPTURE_PAYLOADS`
   - Default: `false`
   - Behavior: stores request/response payloads in the Harpoon admin UI call history.
 - **Private host auto-registration filters**
-  - Flag (repeatable): `--harpoon-hosts-include-suffix`
+  - Flag (repeatable): `--harpoon.hosts-include-suffix`
   - Env: `HARPOON_HOSTS_INCLUDE_SUFFIX` (semicolon- or newline-delimited list)
   - Default: empty
   - Behavior: treat matching host suffixes as private for auto-registration.
 - **Private host regex filters**
-  - Flag (repeatable): `--harpoon-hosts-include-regex`
+  - Flag (repeatable): `--harpoon.hosts-include-regex`
   - Env: `HARPOON_HOSTS_INCLUDE_REGEX` (semicolon- or newline-delimited list)
   - Default: empty
   - Behavior: treat matching hostnames as private for auto-registration (case-insensitive).
 - **Include loopback hosts**
-  - Flag: `--harpoon-hosts-include-loopback`
+  - Flag: `--harpoon.hosts-include-loopback`
   - Env: `HARPOON_HOSTS_INCLUDE_LOOPBACK`
   - Default: `true`
 - **Include private IPs**
-  - Flag: `--harpoon-hosts-include-private`
+  - Flag: `--harpoon.hosts-include-private`
   - Env: `HARPOON_HOSTS_INCLUDE_PRIVATE`
   - Default: `true`
   - Behavior: includes RFC1918 IPv4 plus IPv6 ULA (fc00::/7).

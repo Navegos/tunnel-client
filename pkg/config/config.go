@@ -273,16 +273,16 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.StringArray("mcp.command", nil, "Command to launch an MCP server over stdio (repeatable; format command=...,channel=...) (env.MCP_COMMAND)")
 	fs.Duration("mcp.connection-max-ttl", defaultMCPConnectionMaxTTL, "Maximum lifetime of MCP transport connections (env.MCP_CONNECTION_MAX_TTL)")
 	fs.Int("mcp.max-concurrent-requests", defaultMCPMaxConcurrentRequests, "Maximum number of concurrent requests to the MCP server (env.MCP_MAX_CONCURRENT_REQUESTS)")
-	fs.StringArray("harpoon-target", nil, "Harpoon target mapping (format 'label=...,url=...,desc=...') (env.HARPOON_TARGETS)")
-	fs.Bool("harpoon-allow-plaintext-http", false, "Allow http:// harpoon targets and redirects (env.HARPOON_ALLOW_PLAINTEXT_HTTP)")
-	fs.Int("harpoon-max-response-bytes", DefaultHarpoonMaxResponseBytes, "Maximum harpoon response size in bytes (env.HARPOON_MAX_RESPONSE_BYTES)")
-	fs.Int("harpoon-max-redirects", DefaultHarpoonMaxRedirects, "Maximum number of harpoon redirects (env.HARPOON_MAX_REDIRECTS)")
-	fs.StringArray("harpoon-additional-transport", nil, "Additional harpoon transports (http-streamable) (env.HARPOON_ADDITIONAL_TRANSPORTS)")
-	fs.Bool("harpoon-capture-payloads", false, "Capture request/response payloads for the Harpoon admin UI (debug only). (env.HARPOON_CAPTURE_PAYLOADS)")
-	fs.StringArray("harpoon-hosts-include-suffix", nil, "Host suffixes treated as private for Harpoon auto-registration (repeatable) (env.HARPOON_HOSTS_INCLUDE_SUFFIX)")
-	fs.StringArray("harpoon-hosts-include-regex", nil, "Host regex patterns treated as private for Harpoon auto-registration (repeatable) (env.HARPOON_HOSTS_INCLUDE_REGEX)")
-	fs.Bool("harpoon-hosts-include-loopback", true, "Treat loopback hosts as private for Harpoon auto-registration (env.HARPOON_HOSTS_INCLUDE_LOOPBACK)")
-	fs.Bool("harpoon-hosts-include-private", true, "Treat private IPs as private for Harpoon auto-registration (env.HARPOON_HOSTS_INCLUDE_PRIVATE)")
+	fs.StringArray("harpoon.target", nil, "Harpoon target mapping (format 'label=...,url=...,desc=...') (env.HARPOON_TARGETS)")
+	fs.Bool("harpoon.allow-plaintext-http", false, "Allow http:// harpoon targets and redirects (env.HARPOON_ALLOW_PLAINTEXT_HTTP)")
+	fs.Int("harpoon.max-response-bytes", DefaultHarpoonMaxResponseBytes, "Maximum harpoon response size in bytes (env.HARPOON_MAX_RESPONSE_BYTES)")
+	fs.Int("harpoon.max-redirects", DefaultHarpoonMaxRedirects, "Maximum number of harpoon redirects (env.HARPOON_MAX_REDIRECTS)")
+	fs.StringArray("harpoon.additional-transport", nil, "Additional harpoon transports (http-streamable) (env.HARPOON_ADDITIONAL_TRANSPORTS)")
+	fs.Bool("harpoon.capture-payloads", false, "Capture request/response payloads for the Harpoon admin UI (debug only). (env.HARPOON_CAPTURE_PAYLOADS)")
+	fs.StringArray("harpoon.hosts-include-suffix", nil, "Host suffixes treated as private for Harpoon auto-registration (repeatable) (env.HARPOON_HOSTS_INCLUDE_SUFFIX)")
+	fs.StringArray("harpoon.hosts-include-regex", nil, "Host regex patterns treated as private for Harpoon auto-registration (repeatable) (env.HARPOON_HOSTS_INCLUDE_REGEX)")
+	fs.Bool("harpoon.hosts-include-loopback", true, "Treat loopback hosts as private for Harpoon auto-registration (env.HARPOON_HOSTS_INCLUDE_LOOPBACK)")
+	fs.Bool("harpoon.hosts-include-private", true, "Treat private IPs as private for Harpoon auto-registration (env.HARPOON_HOSTS_INCLUDE_PRIVATE)")
 
 	if f := fs.Lookup("log.file"); f != nil {
 		f.DefValue = "stdout"
@@ -1017,29 +1017,29 @@ func isQualifiedMCPEntry(entry string) bool {
 }
 
 func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (HarpoonConfig, error) {
-	allowPlaintext, err := getBool(fs, lookupEnv, "harpoon-allow-plaintext-http", "HARPOON_ALLOW_PLAINTEXT_HTTP")
+	allowPlaintext, err := getBool(fs, lookupEnv, "harpoon.allow-plaintext-http", "HARPOON_ALLOW_PLAINTEXT_HTTP")
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
-	maxResponseBytes, err := getInt(fs, lookupEnv, "harpoon-max-response-bytes", "HARPOON_MAX_RESPONSE_BYTES", DefaultHarpoonMaxResponseBytes)
+	maxResponseBytes, err := getInt(fs, lookupEnv, "harpoon.max-response-bytes", "HARPOON_MAX_RESPONSE_BYTES", DefaultHarpoonMaxResponseBytes)
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
 	if maxResponseBytes <= 0 {
-		return HarpoonConfig{}, errors.New("harpoon-max-response-bytes must be positive")
+		return HarpoonConfig{}, errors.New("harpoon.max-response-bytes must be positive")
 	}
 	if maxResponseBytes > DefaultHarpoonMaxResponseBytes {
-		return HarpoonConfig{}, fmt.Errorf("harpoon-max-response-bytes must be less than or equal to %d", DefaultHarpoonMaxResponseBytes)
+		return HarpoonConfig{}, fmt.Errorf("harpoon.max-response-bytes must be less than or equal to %d", DefaultHarpoonMaxResponseBytes)
 	}
-	maxRedirects, err := getInt(fs, lookupEnv, "harpoon-max-redirects", "HARPOON_MAX_REDIRECTS", DefaultHarpoonMaxRedirects)
+	maxRedirects, err := getInt(fs, lookupEnv, "harpoon.max-redirects", "HARPOON_MAX_REDIRECTS", DefaultHarpoonMaxRedirects)
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
 	if maxRedirects < 0 {
-		return HarpoonConfig{}, errors.New("harpoon-max-redirects must be non-negative")
+		return HarpoonConfig{}, errors.New("harpoon.max-redirects must be non-negative")
 	}
 	if maxRedirects > DefaultHarpoonMaxRedirects {
-		return HarpoonConfig{}, fmt.Errorf("harpoon-max-redirects must be less than or equal to %d", DefaultHarpoonMaxRedirects)
+		return HarpoonConfig{}, fmt.Errorf("harpoon.max-redirects must be less than or equal to %d", DefaultHarpoonMaxRedirects)
 	}
 	targets, err := buildHarpoonTargets(fs, lookupEnv, allowPlaintext)
 	if err != nil {
@@ -1049,23 +1049,23 @@ func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
-	capturePayloads, err := getBool(fs, lookupEnv, "harpoon-capture-payloads", "HARPOON_CAPTURE_PAYLOADS")
+	capturePayloads, err := getBool(fs, lookupEnv, "harpoon.capture-payloads", "HARPOON_CAPTURE_PAYLOADS")
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
-	hostsIncludeSuffix, err := buildHarpoonHostIncludeList(fs, lookupEnv, "harpoon-hosts-include-suffix", "HARPOON_HOSTS_INCLUDE_SUFFIX")
+	hostsIncludeSuffix, err := buildHarpoonHostIncludeList(fs, lookupEnv, "harpoon.hosts-include-suffix", "HARPOON_HOSTS_INCLUDE_SUFFIX")
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
-	hostsIncludeRegex, err := buildHarpoonHostIncludeList(fs, lookupEnv, "harpoon-hosts-include-regex", "HARPOON_HOSTS_INCLUDE_REGEX")
+	hostsIncludeRegex, err := buildHarpoonHostIncludeList(fs, lookupEnv, "harpoon.hosts-include-regex", "HARPOON_HOSTS_INCLUDE_REGEX")
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
-	hostsIncludeLoopback, err := getBoolWithDefault(fs, lookupEnv, "harpoon-hosts-include-loopback", "HARPOON_HOSTS_INCLUDE_LOOPBACK", true)
+	hostsIncludeLoopback, err := getBoolWithDefault(fs, lookupEnv, "harpoon.hosts-include-loopback", "HARPOON_HOSTS_INCLUDE_LOOPBACK", true)
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
-	hostsIncludePrivate, err := getBoolWithDefault(fs, lookupEnv, "harpoon-hosts-include-private", "HARPOON_HOSTS_INCLUDE_PRIVATE", true)
+	hostsIncludePrivate, err := getBoolWithDefault(fs, lookupEnv, "harpoon.hosts-include-private", "HARPOON_HOSTS_INCLUDE_PRIVATE", true)
 	if err != nil {
 		return HarpoonConfig{}, err
 	}
@@ -1128,10 +1128,10 @@ func validateHarpoonHostRegexes(values []string) error {
 
 func buildHarpoonTargets(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), allowPlaintext bool) ([]HarpoonTarget, error) {
 	var rawTargets []string
-	if flag := fs.Lookup("harpoon-target"); flag != nil && flag.Changed {
-		values, err := fs.GetStringArray("harpoon-target")
+	if flag := fs.Lookup("harpoon.target"); flag != nil && flag.Changed {
+		values, err := fs.GetStringArray("harpoon.target")
 		if err != nil {
-			return nil, fmt.Errorf("invalid value for --harpoon-target: %w", err)
+			return nil, fmt.Errorf("invalid value for --harpoon.target: %w", err)
 		}
 		rawTargets = append(rawTargets, values...)
 	} else if envVal, ok := lookupEnv("HARPOON_TARGETS"); ok && envVal != "" {
@@ -1209,10 +1209,10 @@ func parseHarpoonTarget(raw string, allowPlaintext bool) (HarpoonTarget, error) 
 
 func buildHarpoonAdditionalTransports(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) ([]HarpoonTransportKind, error) {
 	var raw []string
-	if flag := fs.Lookup("harpoon-additional-transport"); flag != nil && flag.Changed {
-		values, err := fs.GetStringArray("harpoon-additional-transport")
+	if flag := fs.Lookup("harpoon.additional-transport"); flag != nil && flag.Changed {
+		values, err := fs.GetStringArray("harpoon.additional-transport")
 		if err != nil {
-			return nil, fmt.Errorf("invalid value for --harpoon-additional-transport: %w", err)
+			return nil, fmt.Errorf("invalid value for --harpoon.additional-transport: %w", err)
 		}
 		raw = append(raw, values...)
 	} else if envVal, ok := lookupEnv("HARPOON_ADDITIONAL_TRANSPORTS"); ok && envVal != "" {

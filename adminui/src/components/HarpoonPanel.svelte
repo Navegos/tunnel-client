@@ -137,7 +137,7 @@
         title={
           captureEnabled
             ? "Request/response bodies are stored in call history (debug only)."
-            : "Request/response bodies are not stored. Enable with --harpoon-capture-payloads."
+            : "Request/response bodies are not stored. Enable with --harpoon.capture-payloads."
         }
       >
         Capture req/resp payloads: {captureEnabled ? "on" : "off"}

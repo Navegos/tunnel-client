@@ -35,7 +35,7 @@
 ## Harpoon channel disabled (`unsupported_channel`)
 
 - `harpoon` commands return `unsupported_channel` when there are no registered Harpoon targets.
-- Confirm you have configured at least one `--harpoon-target` (or `HARPOON_TARGETS`) entry and that it passes validation.
+- Confirm you have configured at least one `--harpoon.target` (or `HARPOON_TARGETS`) entry and that it passes validation.
 
 ## Performance / backlog
 
