@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/transport"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
 
@@ -68,6 +69,59 @@ func TestCallTargetSupportsMethods(t *testing.T) {
 		require.NoError(t, err)
 		body := decodeBody(t, resp.BodyBase64)
 		require.Equal(t, method, body)
+	}
+}
+
+func TestCallTargetUsesProxy(t *testing.T) {
+	targetCalled := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalled <- struct{}{}
+		http.Error(w, "unexpected direct request", http.StatusBadGateway)
+	}))
+	defer target.Close()
+
+	proxyCalled := make(chan struct{}, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyCalled <- struct{}{}
+		_, _ = w.Write([]byte("proxied"))
+	}))
+	defer proxy.Close()
+
+	cfg := &config.HarpoonConfig{
+		AllowPlaintextHTTP: true,
+		MaxResponseBytes:   1024,
+		MaxRedirects:       5,
+		Targets: []config.HarpoonTarget{{
+			Label:   "svc",
+			BaseURL: mustParseURL(t, target.URL),
+		}},
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	registry, err := NewRegistry(logger, cfg.AllowPlaintextHTTP, convertTargets(cfg.Targets))
+	require.NoError(t, err)
+	buffer := NewCallBuffer()
+	proxyTransport, err := transport.ApplyProxy(transport.CloneDefault(), mustParseURL(t, proxy.URL))
+	require.NoError(t, err)
+	server, err := NewServer(cfg, registry, buffer, logger, WithHTTPTransport(proxyTransport))
+	require.NoError(t, err)
+
+	resp, err := server.callTarget(context.Background(), callTargetRequest{
+		Label:  "svc",
+		Method: http.MethodGet,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "proxied", decodeBody(t, resp.BodyBase64))
+
+	select {
+	case <-proxyCalled:
+	default:
+		t.Fatalf("expected proxy to receive request")
+	}
+	select {
+	case <-targetCalled:
+		t.Fatalf("expected target not to be called directly")
+	default:
 	}
 }
 

@@ -3,6 +3,8 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -16,6 +18,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/app"
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
 	"go.openai.org/api/tunnel-client/pkg/types"
 	"go.openai.org/api/tunnel-client/testsupport/mockmcpserver"
 	"go.openai.org/api/tunnel-client/testsupport/mocktunnelservice"
@@ -32,6 +35,8 @@ type harnessConfig struct {
 	mcpTransportKind    config.MCPTransportKind
 	mcpCommandArgs      []string
 	useHarpoonTransport bool
+	preserveClientURLs  bool
+	beforeClientStart   func(*Harness)
 }
 
 // HarnessOption customizes the E2E harness configuration.
@@ -69,6 +74,20 @@ func WithMCPOptions(opts ...mockmcpserver.Option) HarnessOption {
 func WithClientConfig(fn func(*config.Config)) HarnessOption {
 	return func(cfg *harnessConfig) {
 		cfg.clientCustomizer = fn
+	}
+}
+
+// WithPreserveClientURLs prevents the harness from overwriting control-plane and MCP URLs.
+func WithPreserveClientURLs() HarnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.preserveClientURLs = true
+	}
+}
+
+// WithBeforeClientStart registers a hook that runs after mocks start but before tunnel-client starts.
+func WithBeforeClientStart(fn func(*Harness)) HarnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.beforeClientStart = fn
 	}
 }
 
@@ -123,6 +142,8 @@ type Harness struct {
 	mcpStarted    bool
 	inMemoryMCP   *mcp.InMemoryTransport
 	useHarpoon    bool
+	preserveURLs  bool
+	beforeStart   func(*Harness)
 	logWriter     io.Writer
 	logBuffer     *bytes.Buffer
 }
@@ -195,6 +216,8 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 		cfg:          clientCfg,
 		waitTimeout:  cfg.scenarioTimeout,
 		useHarpoon:   cfg.useHarpoonTransport,
+		preserveURLs: cfg.preserveClientURLs,
+		beforeStart:  cfg.beforeClientStart,
 		logWriter:    logWriter,
 		logBuffer:    &logBuf,
 	}
@@ -210,6 +233,9 @@ func (h *Harness) ExecuteScenarious(t testing.TB) {
 	defer h.shutdown(t)
 	h.startControlPlane(t)
 	h.startMCPServer(t)
+	if h.beforeStart != nil {
+		h.beforeStart(h)
+	}
 	h.startClient(t)
 	timeout := h.waitTimeout
 	if timeout <= 0 {
@@ -221,6 +247,31 @@ func (h *Harness) ExecuteScenarious(t testing.TB) {
 		h.dumpFailureState(t, err)
 		t.Fatalf("scenario did not complete before timeout: %v", err)
 	}
+}
+
+// ExecuteScenario returns the error (if any) instead of failing the test directly.
+func (h *Harness) ExecuteScenario(t testing.TB) error {
+	t.Helper()
+	if h.ControlPlane == nil || h.MCP == nil || h.cfg == nil {
+		return errors.New("harness not initialized")
+	}
+	defer h.shutdown(t)
+	h.startControlPlane(t)
+	h.startMCPServer(t)
+	if h.beforeStart != nil {
+		h.beforeStart(h)
+	}
+	h.startClient(t)
+	timeout := h.waitTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := h.ControlPlane.WaitUntilIdle(ctx); err != nil {
+		return fmt.Errorf("scenario did not complete before timeout: %w", err)
+	}
+	return nil
 }
 
 func (h *Harness) dumpFailureState(t testing.TB, cause error) {
@@ -300,19 +351,23 @@ func (h *Harness) startClient(t testing.TB) {
 		t.Fatalf("control plane must be started before the client")
 		return
 	}
-	cfg.ControlPlane.BaseURL = ctrlURL
+	if !h.preserveURLs || cfg.ControlPlane.BaseURL == nil {
+		cfg.ControlPlane.BaseURL = ctrlURL
+	}
 	transportKind := cfg.MCP.TransportKind
 	if transportKind == "" {
 		transportKind = config.MCPTransportHTTPStreamable
 	}
 	switch transportKind {
 	case config.MCPTransportHTTPStreamable:
-		mcpURL := h.MCP.BaseURL()
-		if mcpURL == nil {
-			t.Fatalf("mock MCP server must be started before the client")
-			return
+		if !h.preserveURLs || cfg.MCP.ServerURL == nil {
+			mcpURL := h.MCP.BaseURL()
+			if mcpURL == nil {
+				t.Fatalf("mock MCP server must be started before the client")
+				return
+			}
+			cfg.MCP.ServerURL = mcpURL
 		}
-		cfg.MCP.ServerURL = mcpURL
 	case config.MCPTransportInMemory, config.MCPTransportStdio:
 		if transportKind == config.MCPTransportInMemory && h.inMemoryMCP == nil && !h.useHarpoon {
 			t.Fatalf("mock MCP in-memory transport must be started before the client")
@@ -392,5 +447,16 @@ func (h *Harness) cloneConfig() *config.Config {
 	clone.Health = h.cfg.Health
 	clone.Process = h.cfg.Process
 	clone.MCP = h.cfg.MCP
+	clone.AdminUI = h.cfg.AdminUI
+	clone.Harpoon = h.cfg.Harpoon
+	clone.TLS = h.cfg.TLS
 	return &clone
+}
+
+// SetTLSBundle updates the TLS bundle used by the harnessed tunnel-client.
+func (h *Harness) SetTLSBundle(bundle *tlsconfig.Bundle) {
+	if h == nil || h.cfg == nil {
+		return
+	}
+	h.cfg.TLS = bundle
 }

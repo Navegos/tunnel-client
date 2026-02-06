@@ -105,9 +105,11 @@ type ControlPlaneConfig struct {
 	PollTimeout         time.Duration
 	// PollBackoffMin/PollBackoffMax allow overriding the poller's retry window.
 	// Zero values fall back to the internal defaults.
-	PollBackoffMin time.Duration
-	PollBackoffMax time.Duration
-	ExtraHeaders   map[string]string
+	PollBackoffMin  time.Duration
+	PollBackoffMax  time.Duration
+	ExtraHeaders    map[string]string
+	HTTPProxy       *url.URL
+	HTTPProxySource ProxySource
 }
 
 // LoggingConfig defines logging behavior for the client.
@@ -138,15 +140,19 @@ type MCPConfig struct {
 	ChannelBindings       []MCPChannelBinding
 	ConnectionMaxTTL      time.Duration
 	MaxConcurrentRequests int
+	HTTPProxy             *url.URL
+	HTTPProxySource       ProxySource
 }
 
 // MCPChannelBinding maps a channel to its MCP transport configuration.
 type MCPChannelBinding struct {
-	Channel       types.Channel
-	TransportKind MCPTransportKind
-	ServerURL     *url.URL
-	Command       string
-	CommandArgs   []string
+	Channel         types.Channel
+	TransportKind   MCPTransportKind
+	ServerURL       *url.URL
+	Command         string
+	CommandArgs     []string
+	HTTPProxy       *url.URL
+	HTTPProxySource ProxySource
 }
 
 // ChannelBindingFor returns the configured binding for the provided channel.
@@ -177,6 +183,8 @@ type HarpoonConfig struct {
 	Targets              []HarpoonTarget
 	CapturePayloads      bool
 	HostClassifier       HarpoonHostClassifierConfig
+	HTTPProxy            *url.URL
+	HTTPProxySource      ProxySource
 }
 
 // HarpoonHostClassifierConfig controls which hosts are treated as private.
@@ -257,6 +265,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("control-plane.base-url", defaultControlPlaneBaseURL, "Tunnel control-plane base URL (env.CONTROL_PLANE_BASE_URL)")
 	fs.String("control-plane.tunnel-id", "", "Identifier for this client/tunnel (env.CONTROL_PLANE_TUNNEL_ID)")
 	fs.String("control-plane.api-key", "", "Reference to environment variable or file containing the control-plane API key (format env:VARNAME or file:/path/to/secret)")
+	fs.String("control-plane.http-proxy", "", "Outbound HTTP proxy for the control plane (format <url|env:VAR>)")
 	fs.Int("control-plane.max-inflight", defaultControlPlaneMaxInFlight, "Maximum number of in-flight MCP requests before applying backpressure (env.CONTROL_PLANE_MAX_INFLIGHT_REQUESTS, max 10000)")
 	fs.Duration("control-plane.poll-timeout", defaultControlPlanePollTimeout, "Long-poll timeout when fetching commands from the control plane (env.CONTROL_PLANE_POLL_TIMEOUT)")
 	fs.StringArray("control-plane.extra-headers", nil, "Additional HTTP headers to send to the tunnel control-plane (format 'Key: Value', repeatable) (env.CONTROL_PLANE_EXTRA_HEADERS)")
@@ -269,14 +278,17 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.Bool("allow-remote-ui", false, "Allow remote access to the embedded web UI and log endpoints (env.ALLOW_REMOTE_UI)")
 	fs.Bool("open-web-ui", false, "Open the embedded web UI in your default browser on startup (env.OPEN_WEB_UI)")
 	fs.String("pid.file", "", "File to write the tunnel-client process ID to (env.PID_FILE)")
-	fs.StringArray("mcp.server-url", nil, "Target MCP server URL (repeatable; format url=...,channel=...) (env.MCP_SERVER_URL)")
+	fs.String("http-proxy", "", "Global outbound HTTP proxy (applies to control-plane, MCP, and Harpoon) (format <url|env:VAR>)")
+	fs.StringArray("mcp.server-url", nil, "Target MCP server URL (repeatable; format url=...,channel=...,http-proxy=...) (env.MCP_SERVER_URL)")
 	fs.StringArray("mcp.command", nil, "Command to launch an MCP server over stdio (repeatable; format command=...,channel=...) (env.MCP_COMMAND)")
+	fs.String("mcp.http-proxy", "", "Outbound HTTP proxy for MCP (format <url|env:VAR>)")
 	fs.Duration("mcp.connection-max-ttl", defaultMCPConnectionMaxTTL, "Maximum lifetime of MCP transport connections (env.MCP_CONNECTION_MAX_TTL)")
 	fs.Int("mcp.max-concurrent-requests", defaultMCPMaxConcurrentRequests, "Maximum number of concurrent requests to the MCP server (env.MCP_MAX_CONCURRENT_REQUESTS)")
 	fs.StringArray("harpoon.target", nil, "Harpoon target mapping (format 'label=...,url=...,desc=...') (env.HARPOON_TARGETS)")
 	fs.Bool("harpoon.allow-plaintext-http", false, "Allow http:// harpoon targets and redirects (env.HARPOON_ALLOW_PLAINTEXT_HTTP)")
 	fs.Int("harpoon.max-response-bytes", DefaultHarpoonMaxResponseBytes, "Maximum harpoon response size in bytes (env.HARPOON_MAX_RESPONSE_BYTES)")
 	fs.Int("harpoon.max-redirects", DefaultHarpoonMaxRedirects, "Maximum number of harpoon redirects (env.HARPOON_MAX_REDIRECTS)")
+	fs.String("harpoon.http-proxy", "", "Outbound HTTP proxy for Harpoon requests (format <url|env:VAR>)")
 	fs.StringArray("harpoon.additional-transport", nil, "Additional harpoon transports (http-streamable) (env.HARPOON_ADDITIONAL_TRANSPORTS)")
 	fs.Bool("harpoon.capture-payloads", false, "Capture request/response payloads for the Harpoon admin UI (debug only). (env.HARPOON_CAPTURE_PAYLOADS)")
 	fs.StringArray("harpoon.hosts-include-suffix", nil, "Host suffixes treated as private for Harpoon auto-registration (repeatable) (env.HARPOON_HOSTS_INCLUDE_SUFFIX)")
@@ -303,12 +315,17 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 		return nil, err
 	}
 
-	mcp, err := buildMCPConfig(fs, lookupEnv)
+	globalProxy, globalProxySource, _, err := resolveProxyFlag(fs, lookupEnv, "http-proxy")
 	if err != nil {
 		return nil, err
 	}
 
-	controlPlane, err := buildControlPlaneConfig(fs, lookupEnv)
+	mcp, err := buildMCPConfig(fs, lookupEnv, globalProxy, globalProxySource)
+	if err != nil {
+		return nil, err
+	}
+
+	controlPlane, err := buildControlPlaneConfig(fs, lookupEnv, globalProxy, globalProxySource)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +343,7 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 		return nil, err
 	}
 
-	harpoon, err := buildHarpoonConfig(fs, lookupEnv)
+	harpoon, err := buildHarpoonConfig(fs, lookupEnv, globalProxy, globalProxySource)
 	if err != nil {
 		return nil, err
 	}
@@ -354,6 +371,39 @@ func getValue(fs *pflag.FlagSet, name string) string {
 		return ""
 	}
 	return flag.Value.String()
+}
+
+func resolveProxyFlag(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName string) (*url.URL, ProxySource, bool, error) {
+	if fs == nil {
+		return nil, "", false, nil
+	}
+	flag := fs.Lookup(flagName)
+	if flag == nil || !flag.Changed {
+		return nil, "", false, nil
+	}
+	raw := strings.TrimSpace(flag.Value.String())
+	if raw == "" {
+		return nil, "", true, fmt.Errorf("invalid %s proxy: value is required", flagName)
+	}
+	parsed, source, err := parseProxyReference(flagName, raw, lookupEnv)
+	if err != nil {
+		return nil, "", true, err
+	}
+	return parsed, source, true, nil
+}
+
+func resolveProxyWithFallback(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName string, fallback *url.URL, fallbackSource ProxySource) (*url.URL, ProxySource, error) {
+	parsed, source, set, err := resolveProxyFlag(fs, lookupEnv, flagName)
+	if err != nil {
+		return nil, "", err
+	}
+	if set {
+		return parsed, source, nil
+	}
+	if fallback != nil {
+		return fallback, fallbackSource, nil
+	}
+	return nil, ProxySourceEnvironment, nil
 }
 
 func registerTLSFlags(fs *pflag.FlagSet) {
@@ -452,7 +502,7 @@ func getControlPlaneAPIKey(flagValue string, lookupEnv func(string) (string, boo
 	return "", errMissingControlPlaneAPIKey
 }
 
-func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (ControlPlaneConfig, error) {
+func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), globalProxy *url.URL, globalProxySource ProxySource) (ControlPlaneConfig, error) {
 	baseURLRaw := firstSet(
 		getValue(fs, "control-plane.base-url"),
 		envOrDefault(lookupEnv, "CONTROL_PLANE_BASE_URL", defaultControlPlaneBaseURL),
@@ -554,6 +604,11 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 		return ControlPlaneConfig{}, err
 	}
 
+	httpProxy, httpProxySource, err := resolveProxyWithFallback(fs, lookupEnv, "control-plane.http-proxy", globalProxy, globalProxySource)
+	if err != nil {
+		return ControlPlaneConfig{}, err
+	}
+
 	extraHeaders, err := buildControlPlaneExtraHeaders(fs, lookupEnv)
 	if err != nil {
 		return ControlPlaneConfig{}, err
@@ -566,6 +621,8 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 		MaxInFlightRequests: maxInFlight,
 		PollTimeout:         pollTimeout,
 		ExtraHeaders:        extraHeaders,
+		HTTPProxy:           httpProxy,
+		HTTPProxySource:     httpProxySource,
 	}, nil
 }
 
@@ -772,7 +829,7 @@ func resolveAllowRemoteUI(fs *pflag.FlagSet, lookupEnv func(string) (string, boo
 	return false, nil
 }
 
-func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (MCPConfig, error) {
+func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), globalProxy *url.URL, globalProxySource ProxySource) (MCPConfig, error) {
 	commandEntries, err := resolveMCPEntries(fs, lookupEnv, "mcp.command", "MCP_COMMAND")
 	if err != nil {
 		return MCPConfig{}, err
@@ -782,7 +839,7 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (M
 		return MCPConfig{}, err
 	}
 
-	bindings, err := parseMCPChannelBindings(commandEntries, serverEntries)
+	bindings, err := parseMCPChannelBindings(commandEntries, serverEntries, lookupEnv)
 	if err != nil {
 		return MCPConfig{}, err
 	}
@@ -820,10 +877,44 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (M
 		maxConcurrent = val
 	}
 
+	mcpProxy, mcpProxySource, err := resolveProxyWithFallback(fs, lookupEnv, "mcp.http-proxy", globalProxy, globalProxySource)
+	if err != nil {
+		return MCPConfig{}, err
+	}
+
+	for i := range bindings {
+		if bindings[i].TransportKind != MCPTransportHTTPStreamable {
+			if bindings[i].HTTPProxy != nil {
+				return MCPConfig{}, fmt.Errorf("mcp config: http-proxy not supported for %s channel %q", bindings[i].TransportKind, bindings[i].Channel.Canonical())
+			}
+			bindings[i].HTTPProxySource = ProxySourceIgnored
+			continue
+		}
+		if bindings[i].HTTPProxy != nil {
+			if bindings[i].HTTPProxySource == "" {
+				bindings[i].HTTPProxySource = ProxySource("mcp.server-url")
+			}
+			continue
+		}
+		if mcpProxy != nil {
+			bindings[i].HTTPProxy = mcpProxy
+			bindings[i].HTTPProxySource = mcpProxySource
+			continue
+		}
+		if globalProxy != nil {
+			bindings[i].HTTPProxy = globalProxy
+			bindings[i].HTTPProxySource = globalProxySource
+			continue
+		}
+		bindings[i].HTTPProxySource = ProxySourceEnvironment
+	}
+
 	cfg := MCPConfig{
 		ChannelBindings:       bindings,
 		ConnectionMaxTTL:      ttl,
 		MaxConcurrentRequests: maxConcurrent,
+		HTTPProxy:             mcpProxy,
+		HTTPProxySource:       mcpProxySource,
 	}
 	if mainBinding := cfg.MainChannelBinding(); mainBinding != nil {
 		cfg.ServerURL = mainBinding.ServerURL
@@ -861,7 +952,7 @@ func splitMCPEnvEntries(raw string) []string {
 	return out
 }
 
-func parseMCPChannelBindings(commandEntries, serverEntries []string) ([]MCPChannelBinding, error) {
+func parseMCPChannelBindings(commandEntries, serverEntries []string, lookupEnv func(string) (string, bool)) ([]MCPChannelBinding, error) {
 	bindings := make([]MCPChannelBinding, 0, len(commandEntries)+len(serverEntries))
 	seen := make(map[types.Channel]MCPChannelBinding, len(commandEntries)+len(serverEntries))
 
@@ -887,7 +978,7 @@ func parseMCPChannelBindings(commandEntries, serverEntries []string) ([]MCPChann
 	}
 
 	for _, entry := range serverEntries {
-		binding, err := parseMCPBindingEntry(entry, MCPTransportHTTPStreamable)
+		binding, err := parseMCPBindingEntry(entry, MCPTransportHTTPStreamable, lookupEnv)
 		if err != nil {
 			return nil, err
 		}
@@ -896,7 +987,7 @@ func parseMCPChannelBindings(commandEntries, serverEntries []string) ([]MCPChann
 		}
 	}
 	for _, entry := range commandEntries {
-		binding, err := parseMCPBindingEntry(entry, MCPTransportStdio)
+		binding, err := parseMCPBindingEntry(entry, MCPTransportStdio, lookupEnv)
 		if err != nil {
 			return nil, err
 		}
@@ -911,7 +1002,7 @@ func parseMCPChannelBindings(commandEntries, serverEntries []string) ([]MCPChann
 	return bindings, nil
 }
 
-func parseMCPBindingEntry(entry string, kind MCPTransportKind) (MCPChannelBinding, error) {
+func parseMCPBindingEntry(entry string, kind MCPTransportKind, lookupEnv func(string) (string, bool)) (MCPChannelBinding, error) {
 	if strings.TrimSpace(entry) == "" {
 		return MCPChannelBinding{}, fmt.Errorf("mcp config: %s entry is empty", kind)
 	}
@@ -949,6 +1040,7 @@ func parseMCPBindingEntry(entry string, kind MCPTransportKind) (MCPChannelBindin
 	switch kind {
 	case MCPTransportHTTPStreamable:
 		allowedKeys["url"] = true
+		allowedKeys["http-proxy"] = true
 	case MCPTransportStdio:
 		allowedKeys["command"] = true
 	}
@@ -970,8 +1062,23 @@ func parseMCPBindingEntry(entry string, kind MCPTransportKind) (MCPChannelBindin
 		if !ok {
 			return MCPChannelBinding{}, fmt.Errorf("mcp config: server-url entry %q missing url", entry)
 		}
-		return buildMCPBinding(channel, kind, rawURL)
+		binding, err := buildMCPBinding(channel, kind, rawURL)
+		if err != nil {
+			return MCPChannelBinding{}, err
+		}
+		if rawProxy, ok := values["http-proxy"]; ok {
+			parsed, source, err := parseProxyReference("mcp.server-url", rawProxy, lookupEnv)
+			if err != nil {
+				return MCPChannelBinding{}, err
+			}
+			binding.HTTPProxy = parsed
+			binding.HTTPProxySource = source
+		}
+		return binding, nil
 	case MCPTransportStdio:
+		if _, ok := values["http-proxy"]; ok {
+			return MCPChannelBinding{}, fmt.Errorf("mcp config: http-proxy is not supported for stdio entry %q", entry)
+		}
 		rawCommand, ok := values["command"]
 		if !ok {
 			return MCPChannelBinding{}, fmt.Errorf("mcp config: command entry %q missing command", entry)
@@ -1013,10 +1120,11 @@ func isQualifiedMCPEntry(entry string) bool {
 	trimmed := strings.ToLower(strings.TrimSpace(entry))
 	return strings.HasPrefix(trimmed, "url=") ||
 		strings.HasPrefix(trimmed, "command=") ||
-		strings.HasPrefix(trimmed, "channel=")
+		strings.HasPrefix(trimmed, "channel=") ||
+		strings.HasPrefix(trimmed, "http-proxy=")
 }
 
-func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (HarpoonConfig, error) {
+func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), globalProxy *url.URL, globalProxySource ProxySource) (HarpoonConfig, error) {
 	allowPlaintext, err := getBool(fs, lookupEnv, "harpoon.allow-plaintext-http", "HARPOON_ALLOW_PLAINTEXT_HTTP")
 	if err != nil {
 		return HarpoonConfig{}, err
@@ -1072,6 +1180,10 @@ func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)
 	if err := validateHarpoonHostRegexes(hostsIncludeRegex); err != nil {
 		return HarpoonConfig{}, err
 	}
+	httpProxy, httpProxySource, err := resolveProxyWithFallback(fs, lookupEnv, "harpoon.http-proxy", globalProxy, globalProxySource)
+	if err != nil {
+		return HarpoonConfig{}, err
+	}
 	return HarpoonConfig{
 		AllowPlaintextHTTP:   allowPlaintext,
 		MaxResponseBytes:     maxResponseBytes,
@@ -1085,6 +1197,8 @@ func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)
 			IncludeLoopback: hostsIncludeLoopback,
 			IncludePrivate:  hostsIncludePrivate,
 		},
+		HTTPProxy:       httpProxy,
+		HTTPProxySource: httpProxySource,
 	}, nil
 }
 

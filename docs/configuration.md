@@ -30,6 +30,8 @@
   - Env (preferred): `CONTROL_PLANE_API_KEY`
   - Env (fallback): `OPENAI_API_KEY` (used only if `CONTROL_PLANE_API_KEY` is unset)
   - Required: yes
+- **HTTP proxy (optional)**
+  - Flag: `--control-plane.http-proxy=<url|env:VAR>`
 - **Poll timeout**
   - Flag: `--control-plane.poll-timeout`
   - Env: `CONTROL_PLANE_POLL_TIMEOUT`
@@ -52,6 +54,30 @@ Use a PEM CA bundle to extend the system trust store for **all** outbound TLS co
   - Env: `CA_BUNDLE`
   - Bundle format: PEM file containing one or more CA certificates.
 
+## Outbound HTTP proxy
+
+Use explicit proxy flags to force tunnel-client traffic through a corporate proxy. Each flag accepts a proxy URL or `env:VAR` reference.
+
+- **Global proxy (all outbound HTTP)**
+  - Flag: `--http-proxy=<url|env:VAR>`
+  - Applies to control plane, MCP HTTP, OAuth discovery, and Harpoon unless overridden.
+- **Control plane proxy**
+  - Flag: `--control-plane.http-proxy=<url|env:VAR>`
+- **MCP proxy default**
+  - Flag: `--mcp.http-proxy=<url|env:VAR>`
+  - Per-channel override: `--mcp.server-url="channel=...,url=...,http-proxy=<url|env:VAR>"`
+  - Note: stdio MCP bindings ignore proxy settings.
+- **Harpoon proxy**
+  - Flag: `--harpoon.http-proxy=<url|env:VAR>`
+
+**Precedence (highest to lowest):**
+1. Per-target/per-channel proxy flag.
+2. MCP default proxy (`--mcp.http-proxy`).
+3. Global proxy (`--http-proxy`).
+4. Environment (`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`).
+
+When an explicit proxy flag is set for a target, environment proxy variables (including `NO_PROXY`) are ignored for that target.
+
 ## MCP server
 
 - **Server URL**
@@ -59,7 +85,7 @@ Use a PEM CA bundle to extend the system trust store for **all** outbound TLS co
   - Env: `MCP_SERVER_URL`
   - Required: yes for the `main` channel (unless `--mcp.command` supplies `main`)
   - Legacy form: `--mcp.server-url=https://main.example.com/mcp` (defaults to `main`)
-  - Channel-qualified form: `--mcp.server-url="channel=foo,url=https://foo.example.com/mcp"`
+  - Channel-qualified form: `--mcp.server-url="channel=foo,url=https://foo.example.com/mcp,http-proxy=<url|env:VAR>"`
 - **Command (stdio transport)**
   - Flag (repeatable): `--mcp.command`
   - Env: `MCP_COMMAND`
@@ -82,6 +108,8 @@ Use a PEM CA bundle to extend the system trust store for **all** outbound TLS co
   - Flag: `--mcp.max-concurrent-requests`
   - Env: `MCP_MAX_CONCURRENT_REQUESTS`
   - Default: `10`
+- **HTTP proxy default (optional)**
+  - Flag: `--mcp.http-proxy=<url|env:VAR>`
 
 **OAuth-protected MCP notes:**
 - Forwards inbound `Authorization` headers and discovery GETs through the tunnel-client; discovery payload `resource` and `WWW-Authenticate resource_metadata` are rewritten to tunnel-service URLs for the same `tunnel_id`.
@@ -120,6 +148,8 @@ Harpoon’s channel (`harpoon`) is considered enabled only when at least one tar
   - Env: `HARPOON_MAX_REDIRECTS`
   - Default: `5`
   - Note: this is the upper ceiling for per-call overrides.
+- **HTTP proxy (optional)**
+  - Flag: `--harpoon.http-proxy=<url|env:VAR>`
 - **Additional transport (optional)**
   - Flag: `--harpoon.additional-transport=http-streamable`
   - Env: `HARPOON_ADDITIONAL_TRANSPORTS` (semicolon- or newline-delimited list)
@@ -266,6 +296,18 @@ proxy root CA bundle and keep TLS verification enabled:
   --ca-bundle /etc/ssl/proxy-root.pem \
   --control-plane.tunnel-id "tunnel_<abc>" \
   --mcp.server-url "https://mcp.internal.example.com/mcp"
+```
+
+### Outbound proxy configuration
+
+```bash
+./bin/tunnel-client run \
+  --http-proxy "http://proxy.internal:8080" \
+  --control-plane.http-proxy "env:CONTROL_PROXY_URL" \
+  --mcp.server-url "channel=main,url=https://mcp.internal.example.com/mcp,http-proxy=http://mcp-proxy.internal:8080" \
+  --harpoon.http-proxy "http://harpoon-proxy.internal:8080" \
+  --control-plane.tunnel-id "tunnel_<abc>" \
+  --control-plane.api-key "env:CONTROL_PLANE_API_KEY"
 ```
 
 ### Multi-channel MCP bindings

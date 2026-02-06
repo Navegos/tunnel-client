@@ -61,6 +61,13 @@ func WithSessionHeaderPropagation() Option {
 	}
 }
 
+// WithAllowPendingCommands skips strict pending command/response assertions on Close.
+func WithAllowPendingCommands() Option {
+	return func(mock *MockTunnelService) {
+		mock.allowPending = true
+	}
+}
+
 // ExpectedResponse defines one expected POST /v1/tunnel/{tunnel_id}/response payload.
 type ExpectedResponse struct {
 	RequestID   string
@@ -203,6 +210,7 @@ type MockTunnelService struct {
 	closeOnce           sync.Once
 	storage             *sharedStorage
 	autoSessionMutators bool
+	allowPending        bool
 
 	tb atomic.Value // testing.TB
 }
@@ -416,13 +424,23 @@ func (m *MockTunnelService) Close() {
 		if server != nil {
 			server.Close()
 		}
-		if remainingCmd != 0 {
+		if remainingCmd != 0 && !m.allowPending {
 			m.failf("mock tunnel-service stopped with %d pending command(s)", remainingCmd)
 		}
-		if remainingExp != 0 {
+		if remainingExp != 0 && !m.allowPending {
 			m.failf("mock tunnel-service stopped after missing %d expected response(s)", remainingExp)
 		}
 	})
+}
+
+// AllowPending enables skipping pending command assertions on shutdown.
+func (m *MockTunnelService) AllowPending() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.allowPending = true
 }
 
 // BaseURL returns the base URL the client should target.

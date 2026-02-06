@@ -986,6 +986,58 @@ type dropWarnCapture struct {
 	total int
 }
 
+func TestTunnelServiceClientUsesProxy(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID = "cli-tunnel"
+		apiKey   = "test-api-key"
+	)
+
+	targetCalled := make(chan struct{}, 1)
+	targetServer := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetCalled <- struct{}{}
+		http.Error(w, "unexpected direct request", http.StatusBadGateway)
+	}))
+
+	proxyCalled := make(chan struct{}, 1)
+	proxyServer := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyCalled <- struct{}{}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"commands":[]}`))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, targetServer.URL),
+		TunnelID:    types.TunnelID(tunnelID),
+		APIKey:      apiKey,
+		PollTimeout: time.Second,
+		HTTPProxy:   mustParseURL(t, proxyServer.URL),
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if err != nil {
+		t.Fatalf("NewTunnelServiceClient failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, _, err = client.Poll(ctx, 1)
+	if err != nil {
+		t.Fatalf("Poll failed: %v", err)
+	}
+
+	select {
+	case <-proxyCalled:
+	default:
+		t.Fatalf("expected proxy to receive request")
+	}
+	select {
+	case <-targetCalled:
+		t.Fatalf("expected target server not to be called directly")
+	default:
+	}
+}
+
 func newDiscardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

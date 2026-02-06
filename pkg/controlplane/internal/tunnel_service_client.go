@@ -173,6 +173,10 @@ func buildControlPlaneHTTPTransport(cfg *config.ControlPlaneConfig, tlsBundle *t
 	if err != nil {
 		return nil, fmt.Errorf("controlplane client: %w", err)
 	}
+	base, err = tctransport.ApplyProxy(base, cfg.HTTPProxy)
+	if err != nil {
+		return nil, fmt.Errorf("controlplane client: %w", err)
+	}
 	base = otelhttp.NewTransport(
 		base,
 		otelhttp.WithMeterProvider(meterProvider),

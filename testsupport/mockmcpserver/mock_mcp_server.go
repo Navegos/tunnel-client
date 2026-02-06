@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -116,6 +117,13 @@ func WithToolListChangedNotificationsDisabled() Option {
 	}
 }
 
+// WithTLSServer starts the mock MCP server with TLS enabled.
+func WithTLSServer() Option {
+	return func(m *MockMCPServer) {
+		m.useTLS = true
+	}
+}
+
 type MockMCPServer struct {
 	mu       sync.Mutex
 	calls    []*Call
@@ -140,6 +148,8 @@ type MockMCPServer struct {
 
 	oauthMetadata *oauthex.ProtectedResourceMetadata
 	serverOptions *mcp.ServerOptions
+
+	useTLS bool
 
 	tb atomic.Value // testing.TB
 }
@@ -176,7 +186,11 @@ func (m *MockMCPServer) Start(t testing.TB) {
 
 	streamableHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, nil)
 	var protectedHandler http.Handler = streamableHandler
-	metadataURL := fmt.Sprintf("http://%s%s", listener.Addr().String(), wellKnownOAuthProtectedResourcePath)
+	scheme := "http"
+	if m.useTLS {
+		scheme = "https"
+	}
+	metadataURL := fmt.Sprintf("%s://%s%s", scheme, listener.Addr().String(), wellKnownOAuthProtectedResourcePath)
 	if m.protectOAuth {
 		protectedHandler = auth.RequireBearerToken(m.tokenVerifier(), &auth.RequireBearerTokenOptions{
 			Scopes:              []string{"read", "write"},
@@ -232,7 +246,11 @@ func (m *MockMCPServer) Start(t testing.TB) {
 		Listener: listener,
 		Config:   &http.Server{Handler: httpHandler},
 	}
-	httpServer.Start()
+	if m.useTLS {
+		httpServer.StartTLS()
+	} else {
+		httpServer.Start()
+	}
 
 	parsed, err := url.Parse(httpServer.URL)
 	if err != nil {
@@ -305,6 +323,20 @@ func (m *MockMCPServer) BaseURL() *url.URL {
 	}
 	copyURL := *m.baseURL
 	return &copyURL
+}
+
+// TLSCertPEM returns the server certificate PEM for TLS-enabled servers.
+func (m *MockMCPServer) TLSCertPEM() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.httpServer == nil || m.httpServer.TLS == nil || len(m.httpServer.TLS.Certificates) == 0 {
+		return nil, errors.New("mock MCP server TLS certificate not available")
+	}
+	certs := m.httpServer.TLS.Certificates[0].Certificate
+	if len(certs) == 0 {
+		return nil, errors.New("mock MCP server TLS certificate not available")
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certs[0]}), nil
 }
 
 // StartInMemory launches the mock MCP server on an in-memory transport.

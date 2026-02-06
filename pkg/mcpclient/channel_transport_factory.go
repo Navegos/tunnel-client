@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -17,14 +19,16 @@ import (
 
 // ChannelTransportFactory builds MCP transports for configured channel bindings.
 type ChannelTransportFactory struct {
-	config     *config.MCPConfig
-	logger     *slog.Logger
-	logging    *config.LoggingConfig
-	httpClient *http.Client
-	providers  []TransportProvider
+	config        *config.MCPConfig
+	logger        *slog.Logger
+	logging       *config.LoggingConfig
+	providers     []TransportProvider
+	meterProvider *sdkmetric.MeterProvider
+	tlsBundle     *tlsconfig.Bundle
 
-	mu         sync.Mutex
-	transports map[string]mcp.Transport
+	mu          sync.Mutex
+	transports  map[string]mcp.Transport
+	httpClients map[string]*http.Client
 }
 
 type channelTransportFactoryParams struct {
@@ -42,27 +46,37 @@ func newChannelTransportFactory(p channelTransportFactoryParams) (*ChannelTransp
 	if p.Config == nil || p.Logging == nil || p.Logger == nil || p.MeterProvider == nil {
 		return nil, fmt.Errorf("mcpclient: channel transport factory requires config, logging, logger, and meter provider")
 	}
-	transport, err := buildMcpHTTPTransport(p.Logger, p.Logging, p.MeterProvider, p.TLSBundle)
-	if err != nil {
-		return nil, err
+	factory := &ChannelTransportFactory{
+		config:        p.Config,
+		logger:        p.Logger,
+		logging:       p.Logging,
+		meterProvider: p.MeterProvider,
+		tlsBundle:     p.TLSBundle,
+		providers:     p.TransportProviders,
+		transports:    make(map[string]mcp.Transport),
+		httpClients:   make(map[string]*http.Client),
 	}
-	httpClient := &http.Client{Transport: transport}
-	return &ChannelTransportFactory{
-		config:     p.Config,
-		logger:     p.Logger,
-		logging:    p.Logging,
-		httpClient: httpClient,
-		providers:  p.TransportProviders,
-		transports: make(map[string]mcp.Transport),
-	}, nil
+	factory.logProxyConfig()
+	return factory, nil
 }
 
-// HTTPClient returns the shared HTTP client used for streamable MCP transports.
-func (f *ChannelTransportFactory) HTTPClient() *http.Client {
+// HTTPClientForBinding returns the HTTP client used for streamable MCP transports for a binding.
+func (f *ChannelTransportFactory) HTTPClientForBinding(binding config.MCPChannelBinding) (*http.Client, error) {
 	if f == nil {
-		return nil
+		return nil, fmt.Errorf("mcpclient: channel transport factory is nil")
 	}
-	return f.httpClient
+	transportKind := binding.TransportKind
+	if transportKind == "" {
+		transportKind = config.MCPTransportHTTPStreamable
+	}
+	if transportKind != config.MCPTransportHTTPStreamable {
+		return f.httpClientForKey("default", nil)
+	}
+	channelName := binding.Channel.Canonical()
+	if channelName == "" {
+		return nil, fmt.Errorf("mcpclient: invalid channel name")
+	}
+	return f.httpClientForKey(channelName.String(), binding.HTTPProxy)
 }
 
 // Build returns a cached transport for the requested binding.
@@ -90,10 +104,14 @@ func (f *ChannelTransportFactory) Build(binding config.MCPChannelBinding) (mcp.T
 	if err != nil {
 		return nil, err
 	}
+	httpClient, err := f.HTTPClientForBinding(binding)
+	if err != nil {
+		return nil, err
+	}
 	transport, err := provider.Build(TransportBuildParams{
 		Config:     f.config,
 		Binding:    binding,
-		HTTPClient: f.httpClient,
+		HTTPClient: httpClient,
 	})
 	if err != nil {
 		return nil, err
@@ -118,5 +136,56 @@ func (f *ChannelTransportFactory) decorateTransport(base mcp.Transport) mcp.Tran
 	return &mcp.LoggingTransport{
 		Transport: base,
 		Writer:    slogWriter{logger: logger},
+	}
+}
+
+func (f *ChannelTransportFactory) httpClientForKey(key string, proxyURL *url.URL) (*http.Client, error) {
+	f.mu.Lock()
+	if client, ok := f.httpClients[key]; ok {
+		f.mu.Unlock()
+		return client, nil
+	}
+	f.mu.Unlock()
+	transport, err := buildMcpHTTPTransport(f.logger, f.logging, f.meterProvider, f.tlsBundle, proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Transport: transport}
+	f.mu.Lock()
+	f.httpClients[key] = client
+	f.mu.Unlock()
+	return client, nil
+}
+
+func (f *ChannelTransportFactory) logProxyConfig() {
+	if f == nil || f.logger == nil || f.config == nil {
+		return
+	}
+	logger := f.logger.With(tclog.FieldComponent, tclog.ComponentMcpClient)
+	for _, binding := range f.config.ChannelBindings {
+		channel := binding.Channel.Canonical()
+		transportKind := binding.TransportKind
+		if transportKind == "" {
+			transportKind = config.MCPTransportHTTPStreamable
+		}
+		if transportKind != config.MCPTransportHTTPStreamable {
+			logger.Info("mcp channel proxy ignored for transport",
+				slog.String("channel", channel.String()),
+				slog.String("transport", string(transportKind)),
+				slog.String("proxy_source", binding.HTTPProxySource.String()),
+			)
+			continue
+		}
+		fields := []any{
+			slog.String("channel", channel.String()),
+			slog.String("transport", string(transportKind)),
+		}
+		fields = append(fields, config.ProxyLogFields(binding.HTTPProxy, binding.HTTPProxySource)...)
+		logger.Info("mcp channel proxy configured", fields...)
+		if binding.HTTPProxySource != config.ProxySourceEnvironment && config.EnvProxyConfigured(os.LookupEnv) {
+			logger.Info("mcp channel proxy overrides environment proxy settings",
+				slog.String("channel", channel.String()),
+			)
+		}
 	}
 }

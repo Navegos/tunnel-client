@@ -153,7 +153,7 @@ func NewServer(cfg *config.HarpoonConfig, registry *Registry, buffer *CallBuffer
 		return nil, errors.New("harpoon: registry is required")
 	}
 	if logger == nil {
-		logger = slog.Default()
+		return nil, errors.New("harpoon: logger is required")
 	}
 	if buffer == nil {
 		buffer = NewCallBuffer()

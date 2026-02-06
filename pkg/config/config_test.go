@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1244,6 +1245,111 @@ func TestBuildControlPlaneExtraHeadersFromFlags(t *testing.T) {
 	}
 	if headers["X-Trace-Id"] != "abc123" {
 		t.Fatalf("expected X-Trace-Id=abc123, got %q", headers["X-Trace-Id"])
+	}
+}
+
+func TestParseProxyReference(t *testing.T) {
+	t.Run("envReference", func(t *testing.T) {
+		t.Parallel()
+		proxy, source, err := parseProxyReference("http-proxy", "env:PROXY_URL", lookupEnvMap(map[string]string{
+			"PROXY_URL": "http://proxy.example:8080",
+		}))
+		if err != nil {
+			t.Fatalf("parseProxyReference returned error: %v", err)
+		}
+		if source != ProxySource("env:PROXY_URL") {
+			t.Fatalf("unexpected proxy source: %s", source)
+		}
+		if proxy == nil || proxy.String() != "http://proxy.example:8080" {
+			t.Fatalf("unexpected proxy URL: %v", proxy)
+		}
+	})
+
+	t.Run("missingEnv", func(t *testing.T) {
+		t.Parallel()
+		if _, _, err := parseProxyReference("http-proxy", "env:MISSING", lookupEnvMap(nil)); err == nil {
+			t.Fatalf("expected error for missing env var")
+		}
+	})
+
+	t.Run("invalidScheme", func(t *testing.T) {
+		t.Parallel()
+		if _, _, err := parseProxyReference("http-proxy", "socks5://proxy.example:1080", lookupEnvMap(nil)); err == nil {
+			t.Fatalf("expected error for unsupported scheme")
+		}
+	})
+}
+
+func TestRedactProxyURL(t *testing.T) {
+	t.Parallel()
+	parsed, err := url.Parse("http://user:pass@proxy.example:8080/some/path")
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	redacted := RedactProxyURL(parsed)
+	if redacted != "http://proxy.example:8080" {
+		t.Fatalf("unexpected redacted URL: %s", redacted)
+	}
+}
+
+func TestLoadProxyPrecedence(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=main,url=https://mcp.example,http-proxy=http://channel-proxy:8080",
+		"--control-plane.http-proxy", "http://control-proxy:8080",
+		"--mcp.http-proxy", "http://mcp-proxy:8080",
+		"--harpoon.http-proxy", "http://harpoon-proxy:8080",
+		"--http-proxy", "http://global-proxy:8080",
+	}
+	cfg, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.ControlPlane.HTTPProxy == nil || cfg.ControlPlane.HTTPProxy.String() != "http://control-proxy:8080" {
+		t.Fatalf("unexpected control plane proxy: %v", cfg.ControlPlane.HTTPProxy)
+	}
+	if cfg.ControlPlane.HTTPProxySource != ProxySource("control-plane.http-proxy") {
+		t.Fatalf("unexpected control plane proxy source: %s", cfg.ControlPlane.HTTPProxySource)
+	}
+	if cfg.MCP.HTTPProxy == nil || cfg.MCP.HTTPProxy.String() != "http://mcp-proxy:8080" {
+		t.Fatalf("unexpected MCP proxy: %v", cfg.MCP.HTTPProxy)
+	}
+	if cfg.MCP.HTTPProxySource != ProxySource("mcp.http-proxy") {
+		t.Fatalf("unexpected MCP proxy source: %s", cfg.MCP.HTTPProxySource)
+	}
+	if cfg.Harpoon.HTTPProxy == nil || cfg.Harpoon.HTTPProxy.String() != "http://harpoon-proxy:8080" {
+		t.Fatalf("unexpected harpoon proxy: %v", cfg.Harpoon.HTTPProxy)
+	}
+	if cfg.Harpoon.HTTPProxySource != ProxySource("harpoon.http-proxy") {
+		t.Fatalf("unexpected harpoon proxy source: %s", cfg.Harpoon.HTTPProxySource)
+	}
+
+	binding := cfg.MCP.MainChannelBinding()
+	if binding == nil {
+		t.Fatalf("expected main channel binding")
+		return
+	}
+	if binding.HTTPProxy == nil || binding.HTTPProxy.String() != "http://channel-proxy:8080" {
+		t.Fatalf("unexpected channel proxy: %v", binding.HTTPProxy)
+	}
+	if binding.HTTPProxySource != ProxySource("mcp.server-url") {
+		t.Fatalf("unexpected channel proxy source: %s", binding.HTTPProxySource)
+	}
+}
+
+func TestLoadRejectsStdioProxy(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.command", "channel=main,command=echo hello,http-proxy=http://proxy.example:8080",
+	}
+	_, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err == nil {
+		t.Fatalf("expected error for stdio http-proxy")
 	}
 }
 

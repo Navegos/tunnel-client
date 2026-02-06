@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -92,6 +93,10 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 	if err != nil {
 		return harpoonOutputs{}, err
 	}
+	httpTransport, err = tctransport.ApplyProxy(httpTransport, p.Config.HTTPProxy)
+	if err != nil {
+		return harpoonOutputs{}, err
+	}
 	serverOptions = append(serverOptions, WithHTTPTransport(httpTransport))
 	tlsconfig.LogBundleUsage(logger, p.TLSBundle)
 	server, err := NewServer(p.Config, registry, buffer, logger, serverOptions...)
@@ -110,14 +115,19 @@ func newHarpoonService(p harpoonParams) (harpoonOutputs, error) {
 				transports = append(transports, "http_streamable")
 				httpEndpoint = buildHarpoonHTTPEndpoint(p.Health, p.HealthSvc, 2*time.Second)
 			}
-			logger.Info("harpoon enabled",
+			logFields := []any{
 				slog.Int("target_count", len(targets)),
 				slog.Bool("allow_plaintext_http", p.Config.AllowPlaintextHTTP),
 				slog.Any("transports", transports),
 				slog.String("http_endpoint", httpEndpoint),
 				slog.Any("targets", registry.SummarizeTargets()),
 				slog.String(tclog.FieldComponent, tclog.ComponentHarpoon),
-			)
+			}
+			logFields = append(logFields, config.ProxyLogFields(p.Config.HTTPProxy, p.Config.HTTPProxySource)...)
+			logger.Info("harpoon enabled", logFields...)
+			if p.Config.HTTPProxySource != config.ProxySourceEnvironment && config.EnvProxyConfigured(os.LookupEnv) {
+				logger.Info("harpoon proxy overrides environment proxy settings", slog.String(tclog.FieldComponent, tclog.ComponentHarpoon))
+			}
 			go func() {
 				if err := mcpServer.Run(ctx, serverTransport); err != nil {
 					logger.Error("harpoon server stopped", slog.String("error", err.Error()))
@@ -181,7 +191,7 @@ func registerAdditionalTransport(p additionalTransportParams) error {
 	}
 	logger := p.Logger
 	if logger == nil {
-		logger = slog.Default()
+		return fmt.Errorf("harpoon: logger is required for http-streamable transport")
 	}
 	streamCtx, streamCancel := context.WithCancel(context.Background())
 	p.Lifecycle.Append(fx.Hook{

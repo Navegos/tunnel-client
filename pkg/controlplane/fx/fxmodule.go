@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.uber.org/fx"
@@ -45,6 +46,10 @@ func newTunnelServiceClient(p fetcherParams) (clientResult, error) {
 	client, err := internal.NewTunnelServiceClient(context.Background(), p.Config, p.TLSBundle, logger, p.Logging, p.MeterProvider)
 	if err != nil {
 		return clientResult{}, err
+	}
+	logger.InfoContext(context.Background(), "control-plane proxy configured", config.ProxyLogFields(p.Config.HTTPProxy, p.Config.HTTPProxySource)...)
+	if p.Config.HTTPProxySource != config.ProxySourceEnvironment && config.EnvProxyConfigured(os.LookupEnv) {
+		logger.InfoContext(context.Background(), "control-plane proxy overrides environment proxy settings")
 	}
 
 	return clientResult{
