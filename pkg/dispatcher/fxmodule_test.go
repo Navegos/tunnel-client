@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -184,3 +185,44 @@ func TestNewProcessorChannelBindingsProducesInternalBindingType(t *testing.T) {
 	require.Equal(t, 3, bindings[types.DefaultChannel].Priority)
 	require.Equal(t, 7, bindings[types.ChannelHarpoon].Priority)
 }
+
+func TestNewHarpoonChannelBindingUsesSharedConnectionTransport(t *testing.T) {
+	t.Parallel()
+
+	base := &countingMCPTransport{}
+	binding := newHarpoonChannelBinding(harpoonChannelBindingParams{
+		HarpoonTransport: base,
+	})
+	require.NotNil(t, binding.Transport)
+
+	connA, err := binding.Transport.Connect(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, connA)
+
+	connB, err := binding.Transport.Connect(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, connB)
+
+	require.Same(t, connA, connB)
+	require.Equal(t, 1, base.connectCalls)
+}
+
+type countingMCPTransport struct {
+	connectCalls int
+	conn         mcp.Connection
+}
+
+func (t *countingMCPTransport) Connect(context.Context) (mcp.Connection, error) {
+	t.connectCalls++
+	if t.conn == nil {
+		t.conn = &noopConnection{}
+	}
+	return t.conn, nil
+}
+
+type noopConnection struct{}
+
+func (noopConnection) Read(context.Context) (jsonrpc.Message, error) { return nil, nil }
+func (noopConnection) Write(context.Context, jsonrpc.Message) error  { return nil }
+func (noopConnection) Close() error                                  { return nil }
+func (noopConnection) SessionID() string                             { return "" }

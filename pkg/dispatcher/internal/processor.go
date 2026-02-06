@@ -21,6 +21,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
+	"go.openai.org/api/tunnel-client/pkg/harpoon/hostbus"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
@@ -58,7 +59,8 @@ type processorParams struct {
 	ChannelBindings map[types.Channel]ChannelBinding `optional:"true"`
 	TunnelResponder controlplane.Responder
 	MCPConfig       *config.MCPConfig
-	OAuthHTTPClient *http.Client `name:"mcp_client"`
+	OAuthHTTPClient *http.Client                `name:"mcp_client"`
+	HostBus         hostbus.HostRegistrationBus `optional:"true"`
 	ControlPlaneCfg *config.ControlPlaneConfig
 	MeterProvider   *sdkmetric.MeterProvider
 }
@@ -71,6 +73,7 @@ type mcpProcessor struct {
 	metrics          *processorMetrics
 	tunnelID         types.TunnelID
 	oauthHTTPClient  *http.Client
+	hostBus          hostbus.HostRegistrationBus
 	mcpServerURL     *url.URL
 }
 
@@ -232,6 +235,7 @@ func NewProcessor(p processorParams) (Processor, error) {
 		metrics:          processorMetrics,
 		tunnelID:         p.ControlPlaneCfg.TunnelID,
 		oauthHTTPClient:  p.OAuthHTTPClient,
+		hostBus:          p.HostBus,
 		mcpServerURL:     p.MCPConfig.ServerURL,
 	}, nil
 }
@@ -453,11 +457,31 @@ func (p *mcpProcessor) processOauthDiscoveryCommand(ctx context.Context, logger 
 		return fmt.Errorf("dispatcher processor: missing OAuth metadata URLs")
 	}
 
-	resp, _, _, err := oauth.FetchOAuthMetadata(ctx, p.oauthHTTPClient, candidates, logger)
+	resp, sourceURL, _, err := oauth.FetchOAuthMetadata(ctx, p.oauthHTTPClient, candidates, logger)
 	if err != nil {
 		logger.ErrorContext(ctx, "failed to fetch OAuth discovery ProtectedResourceMetaData", slog.String("error", err.Error()))
 		return err
 	}
+
+	if p.hostBus != nil {
+		bundle, _, bundleErr := oauth.BuildURLBundleFromPRMDWithAuthServerMetadata(
+			ctx,
+			p.oauthHTTPClient,
+			resp.Payload(),
+			time.Now(),
+			sourceURL,
+			logger,
+		)
+		if bundleErr != nil {
+			logger.WarnContext(ctx, "failed to build OAuth discovery host bundle", slog.String("error", bundleErr.Error()))
+		} else if publishErr := p.hostBus.Publish(ctx, bundle); publishErr != nil {
+			logger.WarnContext(ctx, "failed to publish OAuth discovery host bundle", slog.String("error", publishErr.Error()))
+		} else {
+			logger.InfoContext(ctx, "published OAuth discovery host bundle",
+				slog.Int("url_count", len(bundle.URLs)))
+		}
+	}
+
 	tsRequestID, postErr := p.tunnelResponder.PostResponse(ctx, cmd.RequestID(), resp)
 	if postErr != nil {
 		attrs := []any{slog.String("error", postErr.Error())}

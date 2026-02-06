@@ -25,6 +25,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/harpoon"
+	"go.openai.org/api/tunnel-client/pkg/harpoon/hostbus"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
 	"go.openai.org/api/tunnel-client/pkg/types"
@@ -2141,6 +2142,89 @@ func TestProcessorHandlesOAuthDiscoveryCommand(t *testing.T) {
 	require.Equal(t, "application/json", got.response.Headers().Get("Content-Type"))
 }
 
+func TestProcessorOAuthDiscoveryPublishesHostBundle(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	issuer := server.URL + "/issuer-0"
+	prmdPayload := map[string]any{
+		"resource":              server.URL + "/mcp",
+		"authorization_servers": []string{issuer},
+		"scopes_supported":      []string{"mcp:tools"},
+	}
+	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(prmdPayload))
+	})
+	authMetaPayload := map[string]any{
+		"issuer":                 issuer,
+		"authorization_endpoint": issuer + "/authorize",
+		"token_endpoint":         issuer + "/token",
+		"registration_endpoint":  issuer + "/register",
+	}
+	mux.HandleFunc("/issuer-0/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(authMetaPayload))
+	})
+
+	serverURL, err := url.Parse(server.URL + "/mcp")
+	require.NoError(t, err)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	responder := newRecordingResponder()
+	transport := &stubForwardingTransport{conn: &stubForwardingConnection{}}
+	hostBus := newRecordingHostBus()
+	meterProvider := newTestMeterProvider(t)
+	cfg := &config.MCPConfig{
+		ServerURL:             serverURL,
+		ConnectionMaxTTL:      2 * time.Second,
+		MaxConcurrentRequests: 1,
+	}
+
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		ChannelBindings: newTestChannelBindings(transport),
+		TunnelResponder: responder,
+		MCPConfig:       cfg,
+		OAuthHTTPClient: &http.Client{},
+		HostBus:         hostBus,
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakeOauthDiscoveryCommand{
+		id:         types.RequestID("oauth-discovery-publish"),
+		enqueuedAt: time.Now().Add(-time.Second),
+		polledAt:   time.Now(),
+		headers:    http.Header{},
+		shardToken: "shard-oauth-discovery-publish",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+	_ = responder.waitForResponse(t)
+
+	bundle := hostBus.waitForBundle(t)
+	require.NotEmpty(t, bundle.URLs)
+	roles := make(map[string]bool, len(bundle.URLs))
+	for _, record := range bundle.URLs {
+		for _, tag := range record.Tags {
+			if tag.Key == hostbus.TagKeyRole {
+				roles[tag.Value] = true
+			}
+		}
+	}
+	require.True(t, roles["prmd-source"], "expected prmd-source role in host bundle")
+	require.True(
+		t,
+		roles["auth-server-metadata"],
+		"expected auth-server-metadata role in host bundle",
+	)
+}
+
 func TestProcessorNormalizesZeroStatusCodeForJSONRPCResponses(t *testing.T) {
 	t.Parallel()
 
@@ -2242,6 +2326,10 @@ type recordingResponder struct {
 	responses chan tunnelResponse
 }
 
+type recordingHostBus struct {
+	bundles chan hostbus.URLBundle
+}
+
 type tunnelResponse struct {
 	requestID                    types.RequestID
 	response                     *types.TunnelResponse
@@ -2251,6 +2339,12 @@ type tunnelResponse struct {
 func newRecordingResponder() *recordingResponder {
 	return &recordingResponder{
 		responses: make(chan tunnelResponse, 8),
+	}
+}
+
+func newRecordingHostBus() *recordingHostBus {
+	return &recordingHostBus{
+		bundles: make(chan hostbus.URLBundle, 8),
 	}
 }
 
@@ -2288,6 +2382,31 @@ func (r *recordingResponder) waitForResponses(t *testing.T, n int) []tunnelRespo
 		out = append(out, r.waitForResponse(t))
 	}
 	return out
+}
+
+func (r *recordingHostBus) Publish(ctx context.Context, bundle hostbus.URLBundle) error {
+	select {
+	case r.bundles <- bundle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *recordingHostBus) Close() error {
+	return nil
+}
+
+func (r *recordingHostBus) waitForBundle(t *testing.T) hostbus.URLBundle {
+	t.Helper()
+
+	select {
+	case bundle := <-r.bundles:
+		return bundle
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for host bundle")
+		return hostbus.URLBundle{}
+	}
 }
 
 func newTestMeterProvider(t *testing.T) *sdkmetric.MeterProvider {

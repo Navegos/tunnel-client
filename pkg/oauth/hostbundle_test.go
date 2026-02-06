@@ -116,19 +116,26 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadata(t *testing.T) {
 		t.Fatalf("build expanded bundle: %v", err)
 	}
 
-	if len(bundle.URLs) != 9 {
-		t.Fatalf("expected 9 urls, got %d", len(bundle.URLs))
+	if len(bundle.URLs) != 10 {
+		t.Fatalf("expected 10 urls, got %d", len(bundle.URLs))
 	}
 
 	assertURLRecord(t, bundle.URLs[0], resource, "prmd-resource", "0")
 	assertURLRecord(t, bundle.URLs[1], issuer, "prmd-auth-server", "0")
 	assertURLRecord(t, bundle.URLs[2], sourceURL.String(), "prmd-source", "0")
-	assertURLRecord(t, bundle.URLs[3], issuer, "issuer", "0")
-	assertURLRecord(t, bundle.URLs[4], issuer+"/authorize", "authorization-endpoint", "0")
-	assertURLRecord(t, bundle.URLs[5], issuer+"/token", "token-endpoint", "0")
-	assertURLRecord(t, bundle.URLs[6], issuer+"/jwks", "jwks-uri", "0")
-	assertURLRecord(t, bundle.URLs[7], issuer+"/introspect", "introspection-endpoint", "0")
-	assertURLRecord(t, bundle.URLs[8], issuer+"/register", "registration-endpoint", "0")
+	assertURLRecord(
+		t,
+		bundle.URLs[3],
+		server.URL+"/.well-known/oauth-authorization-server/issuer-a",
+		"auth-server-metadata",
+		"0",
+	)
+	assertURLRecord(t, bundle.URLs[4], issuer, "issuer", "0")
+	assertURLRecord(t, bundle.URLs[5], issuer+"/authorize", "authorization-endpoint", "0")
+	assertURLRecord(t, bundle.URLs[6], issuer+"/token", "token-endpoint", "0")
+	assertURLRecord(t, bundle.URLs[7], issuer+"/jwks", "jwks-uri", "0")
+	assertURLRecord(t, bundle.URLs[8], issuer+"/introspect", "introspection-endpoint", "0")
+	assertURLRecord(t, bundle.URLs[9], issuer+"/register", "registration-endpoint", "0")
 }
 
 func TestBuildURLBundleFromPRMDWithAuthServerMetadataPartialFailure(t *testing.T) {
@@ -178,16 +185,23 @@ func TestBuildURLBundleFromPRMDWithAuthServerMetadataPartialFailure(t *testing.T
 		t.Fatalf("build expanded bundle: %v", err)
 	}
 
-	// Base PRMD records (resource + 2 auth-servers + source) plus 2 metadata-derived records from issuer-a.
-	if len(bundle.URLs) != 6 {
-		t.Fatalf("expected 6 urls, got %d", len(bundle.URLs))
+	// Base PRMD records (resource + 2 auth-servers + source) plus 3 metadata-derived records from issuer-a.
+	if len(bundle.URLs) != 7 {
+		t.Fatalf("expected 7 urls, got %d", len(bundle.URLs))
 	}
 	assertURLRecord(t, bundle.URLs[0], server.URL+"/resource", "prmd-resource", "0")
 	assertURLRecord(t, bundle.URLs[1], issuerA, "prmd-auth-server", "0")
 	assertURLRecord(t, bundle.URLs[2], issuerB, "prmd-auth-server", "1")
 	assertURLRecord(t, bundle.URLs[3], sourceURL.String(), "prmd-source", "0")
-	assertURLRecord(t, bundle.URLs[4], issuerA, "issuer", "0")
-	assertURLRecord(t, bundle.URLs[5], issuerA+"/token", "token-endpoint", "0")
+	assertURLRecord(
+		t,
+		bundle.URLs[4],
+		server.URL+"/.well-known/oauth-authorization-server/issuer-a",
+		"auth-server-metadata",
+		"0",
+	)
+	assertURLRecord(t, bundle.URLs[5], issuerA, "issuer", "0")
+	assertURLRecord(t, bundle.URLs[6], issuerA+"/token", "token-endpoint", "0")
 	if issuerARequests != 1 {
 		t.Fatalf("expected exactly one metadata request for first auth server, got %d", issuerARequests)
 	}

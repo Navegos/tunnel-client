@@ -126,10 +126,11 @@ type harpoonChannelBindingParams struct {
 }
 
 func newHarpoonChannelBinding(p harpoonChannelBindingParams) dispatcherChannelBinding {
+	transport := mcpclient.NewSharedConnectionTransport(p.HarpoonTransport)
 	return dispatcherChannelBinding{
 		Channel:       types.ChannelHarpoon,
 		Priority:      0,
-		Transport:     p.HarpoonTransport,
+		Transport:     transport,
 		SupportsMCP:   true,
 		SupportsOAuth: false,
 		Routable: func() bool {

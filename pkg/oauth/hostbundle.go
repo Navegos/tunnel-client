@@ -63,6 +63,27 @@ func buildURLBundleFromPRMDWithAuthServerMetadata(
 	return bundle, authServerMetadataFetch, nil
 }
 
+// BuildURLBundleFromPRMDWithAuthServerMetadata builds a Harpoon registration bundle
+// from Protected Resource Metadata payload and enriches it with auth-server metadata
+// endpoint records.
+func BuildURLBundleFromPRMDWithAuthServerMetadata(
+	ctx context.Context,
+	client *http.Client,
+	payload []byte,
+	fetchedAt time.Time,
+	sourceURL *url.URL,
+	logger *slog.Logger,
+) (hostbus.URLBundle, *AuthServerMetadataFetchResult, error) {
+	return buildURLBundleFromPRMDWithAuthServerMetadata(
+		ctx,
+		client,
+		payload,
+		fetchedAt,
+		sourceURL,
+		logger,
+	)
+}
+
 func urlRecordFromPRMDResource(raw string, index int) hostbus.URLRecord {
 	return hostbus.URLRecord{
 		URL:         parseURL(raw),
@@ -129,6 +150,13 @@ func buildAuthServerMetadataURLRecords(
 	}
 
 	records := make([]hostbus.URLRecord, 0, 6)
+	records = appendAuthServerMetadataRecord(
+		records,
+		fetchResult.SelectedURL,
+		"Auth server metadata URL",
+		"auth-server-metadata",
+		authServerIndex,
+	)
 	records = appendAuthServerMetadataRecord(records, meta.Issuer, "Auth server issuer", "issuer", authServerIndex)
 	records = appendAuthServerMetadataRecord(records, meta.AuthorizationEndpoint, "Auth server authorization endpoint", "authorization-endpoint", authServerIndex)
 	records = appendAuthServerMetadataRecord(records, meta.TokenEndpoint, "Auth server token endpoint", "token-endpoint", authServerIndex)

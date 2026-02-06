@@ -115,8 +115,8 @@ func TestOAuthDiscoveryPublishesPRMDBundle(t *testing.T) {
 	if len(bus.bundles) != 1 {
 		t.Fatalf("expected 1 bundle, got %d", len(bus.bundles))
 	}
-	if len(bus.bundles[0].URLs) != 9 {
-		t.Fatalf("expected 9 urls, got %d", len(bus.bundles[0].URLs))
+	if len(bus.bundles[0].URLs) != 10 {
+		t.Fatalf("expected 10 urls, got %d", len(bus.bundles[0].URLs))
 	}
 	roles := make(map[string]bool, len(bus.bundles[0].URLs))
 	for _, record := range bus.bundles[0].URLs {
@@ -130,6 +130,7 @@ func TestOAuthDiscoveryPublishesPRMDBundle(t *testing.T) {
 		"prmd-resource",
 		"prmd-auth-server",
 		"prmd-source",
+		"auth-server-metadata",
 		"issuer",
 		"authorization-endpoint",
 		"token-endpoint",

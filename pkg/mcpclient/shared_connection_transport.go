@@ -14,6 +14,12 @@ type sharedConnectionTransport struct {
 	err  error
 }
 
+// NewSharedConnectionTransport returns a transport wrapper that reuses the
+// same underlying connection across Connect calls.
+func NewSharedConnectionTransport(base mcp.Transport) mcp.Transport {
+	return newSharedConnectionTransport(base)
+}
+
 func newSharedConnectionTransport(base mcp.Transport) mcp.Transport {
 	if base == nil {
 		return nil
