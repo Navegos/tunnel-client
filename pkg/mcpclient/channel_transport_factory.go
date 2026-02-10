@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.uber.org/fx"
+	"golang.org/x/sync/singleflight"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
@@ -30,6 +31,9 @@ type ChannelTransportFactory struct {
 	mu          sync.Mutex
 	transports  map[string]mcp.Transport
 	httpClients map[string]*http.Client
+
+	transportGroup  singleflight.Group
+	httpClientGroup singleflight.Group
 }
 
 type channelTransportFactoryParams struct {
@@ -97,32 +101,49 @@ func (f *ChannelTransportFactory) Build(binding config.MCPChannelBinding) (mcp.T
 	}
 	f.mu.Unlock()
 
-	transportKind := binding.TransportKind
-	if transportKind == "" {
-		transportKind = config.MCPTransportHTTPStreamable
-	}
-	provider, err := selectTransportProvider(transportKind, f.providers)
-	if err != nil {
-		return nil, err
-	}
-	httpClient, err := f.HTTPClientForBinding(binding)
-	if err != nil {
-		return nil, err
-	}
-	transport, err := provider.Build(TransportBuildParams{
-		Config:     f.config,
-		Binding:    binding,
-		HTTPClient: httpClient,
+	result, err, _ := f.transportGroup.Do(channelName.String(), func() (any, error) {
+		f.mu.Lock()
+		if transport, ok := f.transports[channelName.String()]; ok {
+			f.mu.Unlock()
+			return transport, nil
+		}
+		f.mu.Unlock()
+
+		transportKind := binding.TransportKind
+		if transportKind == "" {
+			transportKind = config.MCPTransportHTTPStreamable
+		}
+		provider, err := selectTransportProvider(transportKind, f.providers)
+		if err != nil {
+			return nil, err
+		}
+		httpClient, err := f.HTTPClientForBinding(binding)
+		if err != nil {
+			return nil, err
+		}
+		transport, err := provider.Build(TransportBuildParams{
+			Config:     f.config,
+			Binding:    binding,
+			HTTPClient: httpClient,
+		})
+		if err != nil {
+			return nil, err
+		}
+		transport = f.decorateTransport(transport)
+
+		f.mu.Lock()
+		f.transports[channelName.String()] = transport
+		f.mu.Unlock()
+
+		return transport, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	transport = f.decorateTransport(transport)
-
-	f.mu.Lock()
-	f.transports[channelName.String()] = transport
-	f.mu.Unlock()
-
+	transport, ok := result.(mcp.Transport)
+	if !ok {
+		return nil, fmt.Errorf("mcpclient: unexpected transport type %T", result)
+	}
 	return transport, nil
 }
 
@@ -147,14 +168,30 @@ func (f *ChannelTransportFactory) httpClientForKey(key string, proxyURL *url.URL
 		return client, nil
 	}
 	f.mu.Unlock()
-	transport, err := buildMcpHTTPTransport(f.logger, f.logging, f.meterProvider, f.tlsBundle, proxyURL)
+	result, err, _ := f.httpClientGroup.Do(key, func() (any, error) {
+		f.mu.Lock()
+		if client, ok := f.httpClients[key]; ok {
+			f.mu.Unlock()
+			return client, nil
+		}
+		f.mu.Unlock()
+		transport, err := buildMcpHTTPTransport(f.logger, f.logging, f.meterProvider, f.tlsBundle, proxyURL)
+		if err != nil {
+			return nil, err
+		}
+		client := &http.Client{Transport: transport}
+		f.mu.Lock()
+		f.httpClients[key] = client
+		f.mu.Unlock()
+		return client, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Transport: transport}
-	f.mu.Lock()
-	f.httpClients[key] = client
-	f.mu.Unlock()
+	client, ok := result.(*http.Client)
+	if !ok {
+		return nil, fmt.Errorf("mcpclient: unexpected http client type %T", result)
+	}
 	return client, nil
 }
 
