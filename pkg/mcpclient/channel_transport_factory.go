@@ -75,13 +75,13 @@ func (f *ChannelTransportFactory) HTTPClientForBinding(binding config.MCPChannel
 		transportKind = config.MCPTransportHTTPStreamable
 	}
 	if transportKind != config.MCPTransportHTTPStreamable {
-		return f.httpClientForKey("default", nil)
+		return f.httpClientForKey("default", nil, nil)
 	}
 	channelName := binding.Channel.Canonical()
 	if channelName == "" {
 		return nil, fmt.Errorf("mcpclient: invalid channel name")
 	}
-	return f.httpClientForKey(channelName.String(), binding.HTTPProxy)
+	return f.httpClientForKey(channelName.String(), binding.HTTPProxy, binding.ClientCertificate)
 }
 
 // Build returns a cached transport for the requested binding.
@@ -161,7 +161,7 @@ func (f *ChannelTransportFactory) decorateTransport(base mcp.Transport) mcp.Tran
 	}
 }
 
-func (f *ChannelTransportFactory) httpClientForKey(key string, proxyURL *url.URL) (*http.Client, error) {
+func (f *ChannelTransportFactory) httpClientForKey(key string, proxyURL *url.URL, clientCertificate *tlsconfig.ClientCertificate) (*http.Client, error) {
 	f.mu.Lock()
 	if client, ok := f.httpClients[key]; ok {
 		f.mu.Unlock()
@@ -175,7 +175,7 @@ func (f *ChannelTransportFactory) httpClientForKey(key string, proxyURL *url.URL
 			return client, nil
 		}
 		f.mu.Unlock()
-		transport, err := buildMcpHTTPTransport(f.logger, f.logging, f.meterProvider, f.tlsBundle, proxyURL)
+		transport, err := buildMcpHTTPTransport(f.logger, f.logging, f.meterProvider, f.tlsBundle, clientCertificate, proxyURL)
 		if err != nil {
 			return nil, err
 		}
@@ -214,9 +214,13 @@ func (f *ChannelTransportFactory) logProxyConfig() {
 		fields := []any{
 			slog.String("channel", channel.String()),
 			slog.String("transport", string(transportKind)),
+			slog.Bool("mtls_enabled", binding.ClientCertificate != nil),
 			slog.String("route_kind", string(route.Kind)),
 			slog.String("route_name", route.Name),
 			slog.String("target_host", route.TargetHostPort),
+		}
+		if binding.ClientCertificate != nil {
+			fields = append(fields, slog.String("mtls_cert_path", binding.ClientCertificate.CertPath))
 		}
 		fields = append(fields, proxy.LogFields(route)...)
 		logger.Info("mcp channel route resolved", fields...)

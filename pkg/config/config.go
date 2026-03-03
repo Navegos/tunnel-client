@@ -139,6 +139,7 @@ type MCPConfig struct {
 	Command               string
 	CommandArgs           []string
 	TransportKind         MCPTransportKind
+	ClientCertificate     *tlsconfig.ClientCertificate
 	ChannelBindings       []MCPChannelBinding
 	ConnectionMaxTTL      time.Duration
 	MaxConcurrentRequests int
@@ -148,13 +149,14 @@ type MCPConfig struct {
 
 // MCPChannelBinding maps a channel to its MCP transport configuration.
 type MCPChannelBinding struct {
-	Channel         types.Channel
-	TransportKind   MCPTransportKind
-	ServerURL       *url.URL
-	Command         string
-	CommandArgs     []string
-	HTTPProxy       *url.URL
-	HTTPProxySource ProxySource
+	Channel           types.Channel
+	TransportKind     MCPTransportKind
+	ServerURL         *url.URL
+	Command           string
+	CommandArgs       []string
+	ClientCertificate *tlsconfig.ClientCertificate
+	HTTPProxy         *url.URL
+	HTTPProxySource   ProxySource
 }
 
 // ChannelBindingFor returns the configured binding for the provided channel.
@@ -264,6 +266,8 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "  ALLOW_REMOTE_UI\tSet to true to allow non-loopback access to the embedded web UI (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPEN_WEB_UI\tSet to true to open the embedded web UI in a browser on startup (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  CA_BUNDLE\tPath to a PEM CA bundle used for outbound TLS connections (additive to system trust) (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  MCP_CLIENT_CERT\tPath (or env:VAR) to PEM client certificate for MCP mTLS (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  MCP_CLIENT_KEY\tPath (or env:VAR) to PEM client private key for MCP mTLS (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  PROXY_CHECK_INTERVAL\tInterval between proxy connectivity checks (optional)")
 }
 
@@ -288,9 +292,11 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("pid.file", "", "File to write the tunnel-client process ID to (env.PID_FILE)")
 	fs.String("http-proxy", "", "Global outbound HTTP proxy (applies to control-plane, MCP, and Harpoon) (format <url|env:VAR>)")
 	fs.Duration("proxy.check-interval", defaultProxyCheckInterval, "Interval between proxy connectivity checks (env.PROXY_CHECK_INTERVAL)")
-	fs.StringArray("mcp.server-url", nil, "Target MCP server URL (repeatable; format url=...,channel=...,http-proxy=...) (env.MCP_SERVER_URL)")
+	fs.StringArray("mcp.server-url", nil, "Target MCP server URL (repeatable; format url=...,channel=...,http-proxy=...,client-cert=...,client-key=...) (env.MCP_SERVER_URL)")
 	fs.StringArray("mcp.command", nil, "Command to launch an MCP server over stdio (repeatable; format command=...,channel=...) (env.MCP_COMMAND)")
 	fs.String("mcp.http-proxy", "", "Outbound HTTP proxy for MCP (format <url|env:VAR>)")
+	fs.String("mcp.client-cert", "", "Path to PEM client certificate for MCP mTLS (format <path|env:VAR>) (env.MCP_CLIENT_CERT)")
+	fs.String("mcp.client-key", "", "Path to PEM client private key for MCP mTLS (format <path|env:VAR>) (env.MCP_CLIENT_KEY)")
 	fs.Duration("mcp.connection-max-ttl", defaultMCPConnectionMaxTTL, "Maximum lifetime of MCP transport connections (env.MCP_CONNECTION_MAX_TTL)")
 	fs.Int("mcp.max-concurrent-requests", defaultMCPMaxConcurrentRequests, "Maximum number of concurrent requests to the MCP server (env.MCP_MAX_CONCURRENT_REQUESTS)")
 	fs.StringArray("harpoon.target", nil, "Harpoon target mapping (format 'label=...,url=...,desc=...') (env.HARPOON_TARGETS)")
@@ -443,6 +449,55 @@ func buildTLSBundle(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (*
 		return nil, fmt.Errorf("invalid ca-bundle %q: %w", path, err)
 	}
 	return bundle, nil
+}
+
+func buildMCPClientCertificate(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (*tlsconfig.ClientCertificate, error) {
+	rawCertPath := firstSet(
+		getValue(fs, "mcp.client-cert"),
+		envOrDefault(lookupEnv, "MCP_CLIENT_CERT", ""),
+	)
+	rawKeyPath := firstSet(
+		getValue(fs, "mcp.client-key"),
+		envOrDefault(lookupEnv, "MCP_CLIENT_KEY", ""),
+	)
+
+	certPath, err := resolvePathReference("mcp.client-cert", rawCertPath, lookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	keyPath, err := resolvePathReference("mcp.client-key", rawKeyPath, lookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	clientCert, err := tlsconfig.LoadClientCertificate(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid MCP client certificate configuration: %w", err)
+	}
+	return clientCert, nil
+}
+
+func resolvePathReference(source, raw string, lookupEnv func(string) (string, bool)) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(strings.ToLower(raw), "env:") {
+		return raw, nil
+	}
+
+	name := strings.TrimSpace(raw[len("env:"):])
+	if name == "" {
+		return "", fmt.Errorf("invalid %s reference %q: env name is required", source, raw)
+	}
+	value, ok := lookupEnv(name)
+	if !ok {
+		return "", fmt.Errorf("invalid %s reference %q: environment variable %q is not set", source, raw, name)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("invalid %s reference %q: environment variable %q is empty", source, raw, name)
+	}
+	return value, nil
 }
 
 func envOrDefault(lookupEnv func(string) (string, bool), key, fallback string) string {
@@ -874,6 +929,11 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), gl
 		return MCPConfig{}, err
 	}
 
+	defaultClientCertificate, err := buildMCPClientCertificate(fs, lookupEnv)
+	if err != nil {
+		return MCPConfig{}, err
+	}
+
 	ttlRaw := firstSet(
 		getValue(fs, "mcp.connection-max-ttl"),
 		envOrDefault(lookupEnv, "MCP_CONNECTION_MAX_TTL", defaultMCPConnectionMaxTTL.String()),
@@ -912,13 +972,21 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), gl
 		return MCPConfig{}, err
 	}
 
+	boundHTTPTransportCount := 0
 	for i := range bindings {
 		if bindings[i].TransportKind != MCPTransportHTTPStreamable {
 			if bindings[i].HTTPProxy != nil {
 				return MCPConfig{}, fmt.Errorf("mcp config: http-proxy not supported for %s channel %q", bindings[i].TransportKind, bindings[i].Channel.Canonical())
 			}
+			if bindings[i].ClientCertificate != nil {
+				return MCPConfig{}, fmt.Errorf("mcp config: client certificates are not supported for %s channel %q", bindings[i].TransportKind, bindings[i].Channel.Canonical())
+			}
 			bindings[i].HTTPProxySource = ProxySourceIgnored
 			continue
+		}
+		boundHTTPTransportCount++
+		if bindings[i].ClientCertificate == nil {
+			bindings[i].ClientCertificate = defaultClientCertificate
 		}
 		if bindings[i].HTTPProxy != nil {
 			if bindings[i].HTTPProxySource == "" {
@@ -938,8 +1006,12 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), gl
 		}
 		bindings[i].HTTPProxySource = ProxySourceNone
 	}
+	if defaultClientCertificate != nil && boundHTTPTransportCount == 0 {
+		return MCPConfig{}, errors.New("mcp.client-cert and mcp.client-key require at least one http-streamable mcp.server-url binding")
+	}
 
 	cfg := MCPConfig{
+		ClientCertificate:     defaultClientCertificate,
 		ChannelBindings:       bindings,
 		ConnectionMaxTTL:      ttl,
 		MaxConcurrentRequests: maxConcurrent,
@@ -951,6 +1023,7 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), gl
 		cfg.Command = mainBinding.Command
 		cfg.CommandArgs = mainBinding.CommandArgs
 		cfg.TransportKind = mainBinding.TransportKind
+		cfg.ClientCertificate = mainBinding.ClientCertificate
 	}
 	return cfg, nil
 }
@@ -1071,6 +1144,8 @@ func parseMCPBindingEntry(entry string, kind MCPTransportKind, lookupEnv func(st
 	case MCPTransportHTTPStreamable:
 		allowedKeys["url"] = true
 		allowedKeys["http-proxy"] = true
+		allowedKeys["client-cert"] = true
+		allowedKeys["client-key"] = true
 	case MCPTransportStdio:
 		allowedKeys["command"] = true
 	}
@@ -1103,6 +1178,27 @@ func parseMCPBindingEntry(entry string, kind MCPTransportKind, lookupEnv func(st
 			}
 			binding.HTTPProxy = parsed
 			binding.HTTPProxySource = source
+		}
+		if rawClientCert, ok := values["client-cert"]; ok {
+			certPath, err := resolvePathReference("mcp.server-url client-cert", rawClientCert, lookupEnv)
+			if err != nil {
+				return MCPChannelBinding{}, err
+			}
+			rawClientKey, ok := values["client-key"]
+			if !ok {
+				return MCPChannelBinding{}, fmt.Errorf("mcp config: server-url entry %q missing client-key", entry)
+			}
+			keyPath, err := resolvePathReference("mcp.server-url client-key", rawClientKey, lookupEnv)
+			if err != nil {
+				return MCPChannelBinding{}, err
+			}
+			clientCert, err := tlsconfig.LoadClientCertificate(certPath, keyPath)
+			if err != nil {
+				return MCPChannelBinding{}, fmt.Errorf("invalid mcp.server-url client certificate entry %q: %w", entry, err)
+			}
+			binding.ClientCertificate = clientCert
+		} else if _, ok := values["client-key"]; ok {
+			return MCPChannelBinding{}, fmt.Errorf("mcp config: server-url entry %q missing client-cert", entry)
 		}
 		return binding, nil
 	case MCPTransportStdio:
@@ -1151,7 +1247,9 @@ func isQualifiedMCPEntry(entry string) bool {
 	return strings.HasPrefix(trimmed, "url=") ||
 		strings.HasPrefix(trimmed, "command=") ||
 		strings.HasPrefix(trimmed, "channel=") ||
-		strings.HasPrefix(trimmed, "http-proxy=")
+		strings.HasPrefix(trimmed, "http-proxy=") ||
+		strings.HasPrefix(trimmed, "client-cert=") ||
+		strings.HasPrefix(trimmed, "client-key=")
 }
 
 func buildHarpoonConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), globalProxy *url.URL, globalProxySource ProxySource) (HarpoonConfig, error) {

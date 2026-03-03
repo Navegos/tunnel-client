@@ -277,6 +277,11 @@ Recommended configuration:
 - `MCP_MAX_CONCURRENT_REQUESTS`: MCP parallelism (default `10`)
 - `LOG_FORMAT=json` and `LOG_LEVEL=info` for production logs
 
+Optional mTLS configuration for MCP server authentication:
+
+- `MCP_CLIENT_CERT`: path to PEM client certificate used for outbound MCP HTTPS
+- `MCP_CLIENT_KEY`: path to PEM client private key (must be paired with `MCP_CLIENT_CERT`)
+
 Operational helpers (optional):
 
 - `HEALTH_LISTEN_ADDR` (default `:8080`)

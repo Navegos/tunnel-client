@@ -8,8 +8,8 @@ This document captures forward-looking ideas. It is **not** a guarantee of behav
   - Relay MCP JSON-RPC notifications (no ID) back through the control plane so long-running requests can surface progress.
 - **Richer readiness**
   - Make readiness reflect meaningful control-plane/MCP connectivity signals (instead of basic “process up”).
-- **Mutual TLS (mTLS)**
-  - Add an optional client-certificate based authentication mode in addition to API keys.
+- **mTLS certificate automation**
+  - Add operator tooling for cert issuance and rotation workflows now that tunnel-client supports per-channel mTLS client certificates.
 - **Control-plane allowlisting**
   - Support IP-based controls or tighter network restrictions where applicable.
 - **Tracing**

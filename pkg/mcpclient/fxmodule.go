@@ -192,12 +192,16 @@ func (w slogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig, meterProvider *sdkmetric.MeterProvider, tlsBundle *tlsconfig.Bundle, proxyURL *url.URL) (http.RoundTripper, error) {
+func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig, meterProvider *sdkmetric.MeterProvider, tlsBundle *tlsconfig.Bundle, clientCertificate *tlsconfig.ClientCertificate, proxyURL *url.URL) (http.RoundTripper, error) {
 	// Order matters (outermost to innermost):
 	//   1. Forwarding injects headers before anything else touches the request.
 	//   2. Logging wraps otel instrumentation so raw dumps include forwarded headers.
 	//   3. otelhttp instrumentation sits closest to the network to record final calls.
 	base, err := tctransport.CloneDefaultWithBundle(tlsBundle)
+	if err != nil {
+		return nil, fmt.Errorf("mcpclient: %w", err)
+	}
+	base, err = tctransport.ApplyClientCertificate(base, clientCertificate)
 	if err != nil {
 		return nil, fmt.Errorf("mcpclient: %w", err)
 	}

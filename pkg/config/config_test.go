@@ -933,6 +933,171 @@ func TestLoadRejectsMissingMainChannel(t *testing.T) {
 	}
 }
 
+func TestLoadParsesMCPClientCertificateFlags(t *testing.T) {
+	certPath, keyPath := writeTempClientCertPair(t)
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=main,url=https://mcp.example",
+		"--mcp.client-cert", certPath,
+		"--mcp.client-key", keyPath,
+	}
+	cfg, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.MCP.ClientCertificate == nil {
+		t.Fatalf("expected MCP client certificate to be configured")
+	}
+	if cfg.MCP.ClientCertificate.CertPath != certPath {
+		t.Fatalf("expected cert path %q, got %q", certPath, cfg.MCP.ClientCertificate.CertPath)
+	}
+	mainBinding := cfg.MCP.MainChannelBinding()
+	if mainBinding == nil || mainBinding.ClientCertificate == nil {
+		t.Fatalf("expected main binding client certificate")
+	}
+	if mainBinding.ClientCertificate.KeyPath != keyPath {
+		t.Fatalf("expected key path %q, got %q", keyPath, mainBinding.ClientCertificate.KeyPath)
+	}
+}
+
+func TestLoadParsesMCPClientCertificatePerChannel(t *testing.T) {
+	certPath, keyPath := writeTempClientCertPair(t)
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", fmt.Sprintf("channel=main,url=https://mcp.example,client-cert=%s,client-key=%s", certPath, keyPath),
+	}
+	cfg, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	binding := cfg.MCP.MainChannelBinding()
+	if binding == nil || binding.ClientCertificate == nil {
+		t.Fatalf("expected main binding client certificate")
+	}
+	if binding.ClientCertificate.CertPath != certPath {
+		t.Fatalf("expected cert path %q, got %q", certPath, binding.ClientCertificate.CertPath)
+	}
+}
+
+func TestLoadSupportsDistinctMCPClientCertificatesPerChannel(t *testing.T) {
+	mainCertPath, mainKeyPath := writeTempClientCertPair(t)
+	analyticsCertPath, analyticsKeyPath := writeTempClientCertPair(t)
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", fmt.Sprintf("channel=main,url=https://mcp-main.example,client-cert=%s,client-key=%s", mainCertPath, mainKeyPath),
+		"--mcp.server-url", fmt.Sprintf("channel=analytics,url=https://mcp-analytics.example,client-cert=%s,client-key=%s", analyticsCertPath, analyticsKeyPath),
+	}
+	cfg, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	mainBinding := cfg.MCP.ChannelBindingFor(types.DefaultChannel)
+	if mainBinding == nil || mainBinding.ClientCertificate == nil {
+		t.Fatalf("expected main binding client certificate")
+	}
+	analyticsBinding := cfg.MCP.ChannelBindingFor(types.Channel("analytics"))
+	if analyticsBinding == nil || analyticsBinding.ClientCertificate == nil {
+		t.Fatalf("expected analytics binding client certificate")
+	}
+	if mainBinding.ClientCertificate.CertPath == analyticsBinding.ClientCertificate.CertPath {
+		t.Fatalf("expected distinct per-channel certificates")
+	}
+}
+
+func TestLoadMCPClientCertificateFallbackAndOverride(t *testing.T) {
+	defaultCertPath, defaultKeyPath := writeTempClientCertPair(t)
+	overrideCertPath, overrideKeyPath := writeTempClientCertPair(t)
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.client-cert", defaultCertPath,
+		"--mcp.client-key", defaultKeyPath,
+		"--mcp.server-url", "channel=main,url=https://mcp-main.example",
+		"--mcp.server-url", fmt.Sprintf("channel=analytics,url=https://mcp-analytics.example,client-cert=%s,client-key=%s", overrideCertPath, overrideKeyPath),
+	}
+	cfg, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	mainBinding := cfg.MCP.ChannelBindingFor(types.DefaultChannel)
+	if mainBinding == nil || mainBinding.ClientCertificate == nil {
+		t.Fatalf("expected main binding client certificate")
+	}
+	if mainBinding.ClientCertificate.CertPath != defaultCertPath {
+		t.Fatalf("expected default cert path %q, got %q", defaultCertPath, mainBinding.ClientCertificate.CertPath)
+	}
+	analyticsBinding := cfg.MCP.ChannelBindingFor(types.Channel("analytics"))
+	if analyticsBinding == nil || analyticsBinding.ClientCertificate == nil {
+		t.Fatalf("expected analytics binding client certificate")
+	}
+	if analyticsBinding.ClientCertificate.CertPath != overrideCertPath {
+		t.Fatalf("expected override cert path %q, got %q", overrideCertPath, analyticsBinding.ClientCertificate.CertPath)
+	}
+}
+
+func TestLoadRejectsIncompleteMCPClientCertificate(t *testing.T) {
+	certPath, _ := writeTempClientCertPair(t)
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=main,url=https://mcp.example",
+		"--mcp.client-cert", certPath,
+	}
+	_, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err == nil {
+		t.Fatalf("expected error for incomplete MCP client certificate")
+	}
+	if !strings.Contains(err.Error(), "client key path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsIncompletePerChannelMCPClientCertificate(t *testing.T) {
+	certPath, _ := writeTempClientCertPair(t)
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", fmt.Sprintf("channel=main,url=https://mcp.example,client-cert=%s", certPath),
+	}
+	_, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+	}))
+	if err == nil {
+		t.Fatalf("expected error for incomplete per-channel MCP client certificate")
+	}
+	if !strings.Contains(err.Error(), "missing client-key") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadParsesMCPClientCertificateEnvReferences(t *testing.T) {
+	certPath, keyPath := writeTempClientCertPair(t)
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.server-url", "channel=main,url=https://mcp.example",
+		"--mcp.client-cert", "env:MCP_CLIENT_CERT_FILE",
+		"--mcp.client-key", "env:MCP_CLIENT_KEY_FILE",
+	}
+	cfg, err := Load(args, lookupEnvMap(map[string]string{
+		"CONTROL_PLANE_API_KEY": "control-key",
+		"MCP_CLIENT_CERT_FILE":  certPath,
+		"MCP_CLIENT_KEY_FILE":   keyPath,
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.MCP.MainChannelBinding() == nil || cfg.MCP.MainChannelBinding().ClientCertificate == nil {
+		t.Fatalf("expected main binding client certificate")
+	}
+}
+
 func TestParseCommandArgv(t *testing.T) {
 	testCases := map[string]struct {
 		raw     string
@@ -1420,6 +1585,44 @@ func writeTempCABundle(t *testing.T) string {
 		t.Fatalf("write bundle: %v", err)
 	}
 	return path
+}
+
+func writeTempClientCertPair(t *testing.T) (string, string) {
+	t.Helper()
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject: pkix.Name{
+			CommonName: "test-client",
+		},
+		NotBefore:   time.Now().Add(-time.Hour),
+		NotAfter:    time.Now().Add(time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
+
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "client.crt")
+	keyPath := filepath.Join(dir, "client.key")
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	return certPath, keyPath
 }
 
 func generateTestCertPEM(t *testing.T) []byte {

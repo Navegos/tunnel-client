@@ -90,7 +90,7 @@ When an explicit proxy flag is set for a target, environment proxy variables (in
   - Env: `MCP_SERVER_URL`
   - Required: yes for the `main` channel (unless `--mcp.command` supplies `main`)
   - Legacy form: `--mcp.server-url=https://main.example.com/mcp` (defaults to `main`)
-  - Channel-qualified form: `--mcp.server-url="channel=foo,url=https://foo.example.com/mcp,http-proxy=<url|env:VAR>"`
+  - Channel-qualified form: `--mcp.server-url="channel=foo,url=https://foo.example.com/mcp,http-proxy=<url|env:VAR>,client-cert=<path|env:VAR>,client-key=<path|env:VAR>"`
 - **Command (stdio transport)**
   - Flag (repeatable): `--mcp.command`
   - Env: `MCP_COMMAND`
@@ -115,6 +115,15 @@ When an explicit proxy flag is set for a target, environment proxy variables (in
   - Default: `10`
 - **HTTP proxy default (optional)**
   - Flag: `--mcp.http-proxy=<url|env:VAR>`
+- **mTLS client certificate default (optional)**
+  - Flag: `--mcp.client-cert=<path|env:VAR>`
+  - Env: `MCP_CLIENT_CERT`
+- **mTLS client private key default (optional)**
+  - Flag: `--mcp.client-key=<path|env:VAR>`
+  - Env: `MCP_CLIENT_KEY`
+  - Behavior: both values are required together.
+  - Scope: applies to all `http-streamable` MCP channels unless a channel-qualified `--mcp.server-url` entry provides its own `client-cert` + `client-key`.
+  - Note: stdio channels ignore mTLS settings.
 
 **OAuth-protected MCP notes:**
 - Forwards inbound `Authorization` headers and discovery GETs through the tunnel-client; discovery payload `resource` and `WWW-Authenticate resource_metadata` are rewritten to tunnel-service URLs for the same `tunnel_id`.
@@ -324,6 +333,18 @@ proxy root CA bundle (additive to system trust) and keep TLS verification enable
   --harpoon.http-proxy "http://harpoon-proxy.internal:8080" \
   --control-plane.tunnel-id "tunnel_<abc>" \
   --control-plane.api-key "env:CONTROL_PLANE_API_KEY"
+```
+
+### MCP mTLS configuration
+
+```bash
+./bin/tunnel-client run \
+  --control-plane.tunnel-id "tunnel_<abc>" \
+  --control-plane.api-key "env:CONTROL_PLANE_API_KEY" \
+  --mcp.client-cert "/etc/tunnel-client/mtls/default-client.crt" \
+  --mcp.client-key "/etc/tunnel-client/mtls/default-client.key" \
+  --mcp.server-url "channel=main,url=https://mcp.internal.example.com/mcp" \
+  --mcp.server-url "channel=analytics,url=https://analytics.internal.example.com/mcp,client-cert=/etc/tunnel-client/mtls/analytics-client.crt,client-key=/etc/tunnel-client/mtls/analytics-client.key"
 ```
 
 ### Multi-channel MCP bindings

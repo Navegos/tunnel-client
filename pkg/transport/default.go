@@ -47,3 +47,28 @@ func ApplyBundle(base http.RoundTripper, bundle *tlsconfig.Bundle) (http.RoundTr
 	cloned.TLSClientConfig = tlsConfig
 	return cloned, nil
 }
+
+// ApplyClientCertificate applies an mTLS client certificate to the provided
+// RoundTripper when one is configured.
+func ApplyClientCertificate(base http.RoundTripper, clientCertificate *tlsconfig.ClientCertificate) (http.RoundTripper, error) {
+	if clientCertificate == nil {
+		return base, nil
+	}
+	if base == nil {
+		return nil, fmt.Errorf("base transport is nil")
+	}
+	transport, ok := base.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("unsupported transport type %T", base)
+	}
+	cloned := transport.Clone()
+	tlsConfig := cloned.TLSClientConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{}
+	} else {
+		tlsConfig = tlsConfig.Clone()
+	}
+	tlsConfig.Certificates = []tls.Certificate{clientCertificate.Certificate}
+	cloned.TLSClientConfig = tlsConfig
+	return cloned, nil
+}
