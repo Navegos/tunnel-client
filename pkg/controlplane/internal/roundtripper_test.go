@@ -67,3 +67,37 @@ func TestControlPlaneRoundTripperWarnsOnOverride(t *testing.T) {
 	assert.Equal(t, "Accept", handler.header, "expected warning for Accept header")
 	assert.Equal(t, "application/problem+json", req.Header.Get("Accept"), "expected override to apply")
 }
+
+func TestControlPlaneRoundTripperNoWarningWhenValueMatches(t *testing.T) {
+	t.Parallel()
+
+	handler := &warnCaptureHandler{}
+	logger := slog.New(handler)
+
+	rt := newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	}), "api-key", "ua", map[string]string{"Accept": "application/json"}, logger)
+
+	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
+	if !assert.NoError(t, err, "build request") {
+		return
+	}
+
+	_, err = rt.RoundTrip(req)
+	assert.NoError(t, err, "round trip failed")
+	assert.False(t, handler.seenOverride, "did not expect override warning for identical value")
+	assert.Equal(t, "application/json", req.Header.Get("Accept"))
+}
+
+func TestNewControlPlaneRoundTripperPanicsOnNilLogger(t *testing.T) {
+	t.Parallel()
+
+	assert.PanicsWithValue(t,
+		"control-plane round tripper: logger is required",
+		func() {
+			_ = newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+			}), "api-key", "ua", nil, nil)
+		},
+	)
+}

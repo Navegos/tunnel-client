@@ -1,7 +1,11 @@
 package proxyhealth
 
 import (
+	"bufio"
+	"encoding/base64"
+	"net"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +39,88 @@ func TestRecordResultStateTransitions(t *testing.T) {
 	state = checker.HealthSummaries()[0].HealthState
 	if state != string(HealthStateHealthy) {
 		t.Fatalf("expected healthy, got %s", state)
+	}
+}
+
+func TestConnectThroughProxyIncludesProxyAuthorization(t *testing.T) {
+	t.Parallel()
+
+	clientConn, proxyConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = proxyConn.Close()
+	})
+
+	requestLines := make(chan string, 1)
+	go func() {
+		reader := bufio.NewReader(proxyConn)
+		var builder strings.Builder
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			builder.WriteString(line)
+			if line == "\r\n" {
+				break
+			}
+		}
+		requestLines <- builder.String()
+		_, _ = proxyConn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+	}()
+
+	proxyURL := mustParseURL(t, "http://alice:wonderland@proxy.example:8080")
+	duration, category, err := connectThroughProxy(clientConn, proxyURL, "api.example.com:443", time.Second)
+	if err != nil {
+		t.Fatalf("connectThroughProxy returned error: %v", err)
+	}
+	if category != "2xx" {
+		t.Fatalf("status category = %q, want %q", category, "2xx")
+	}
+	if duration <= 0 {
+		t.Fatalf("duration = %v, want > 0", duration)
+	}
+
+	rawRequest := <-requestLines
+	if !strings.Contains(rawRequest, "CONNECT api.example.com:443 HTTP/1.1\r\n") {
+		t.Fatalf("missing CONNECT request line: %q", rawRequest)
+	}
+	encodedCreds := base64.StdEncoding.EncodeToString([]byte("alice:wonderland"))
+	wantHeader := "Proxy-Authorization: Basic " + encodedCreds + "\r\n"
+	if !strings.Contains(rawRequest, wantHeader) {
+		t.Fatalf("missing proxy authorization header: got %q want to contain %q", rawRequest, wantHeader)
+	}
+}
+
+func TestConnectThroughProxyReturnsStatusCategoryForErrors(t *testing.T) {
+	t.Parallel()
+
+	clientConn, proxyConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = proxyConn.Close()
+	})
+
+	go func() {
+		reader := bufio.NewReader(proxyConn)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if line == "\r\n" {
+				break
+			}
+		}
+		_, _ = proxyConn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n"))
+	}()
+
+	_, category, err := connectThroughProxy(clientConn, nil, "api.example.com:443", time.Second)
+	if err == nil {
+		t.Fatal("expected error for 4xx CONNECT response")
+	}
+	if category != "4xx" {
+		t.Fatalf("status category = %q, want %q", category, "4xx")
 	}
 }
 

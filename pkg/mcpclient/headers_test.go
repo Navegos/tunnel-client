@@ -25,6 +25,28 @@ func TestFindHeaderValue(t *testing.T) {
 			target:  "X-Test",
 			want:    nil,
 		},
+		{
+			name:    "returns first value when header present",
+			headers: http.Header{"X-Test": {"value-1", "value-2"}},
+			target:  "X-Test",
+			want:    ptr("value-1"),
+		},
+		{
+			name: "handles case insensitive lookup",
+			headers: func() http.Header {
+				h := make(http.Header)
+				h.Set("mcp-session-id", "session-123")
+				return h
+			}(),
+			target: HeaderSessionID,
+			want:   ptr("session-123"),
+		},
+		{
+			name:    "returns nil for empty header value",
+			headers: http.Header{"X-Test": {""}},
+			target:  "X-Test",
+			want:    nil,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -44,8 +66,6 @@ func TestFindHeaderValue(t *testing.T) {
 }
 
 func TestSessionIDFromHeaders(t *testing.T) {
-	ptr := func(v string) *string { return &v }
-
 	testCases := []struct {
 		name    string
 		headers http.Header
@@ -78,3 +98,5 @@ func TestSessionIDFromHeaders(t *testing.T) {
 		})
 	}
 }
+
+func ptr(v string) *string { return &v }

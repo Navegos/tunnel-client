@@ -21,6 +21,9 @@ func newControlPlaneRoundTripper(base http.RoundTripper, apiKey, userAgent strin
 	if base == nil {
 		base = tctransport.CloneDefault()
 	}
+	if logger == nil {
+		panic("control-plane round tripper: logger is required")
+	}
 	return &controlPlaneRoundTripper{
 		base:         base,
 		apiKey:       apiKey,
@@ -44,14 +47,9 @@ func (c *controlPlaneRoundTripper) applyExtraHeaders(ctx context.Context, header
 		return
 	}
 
-	logger := c.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-
 	for k, v := range c.extraHeaders {
 		if existing := headers.Get(k); existing != "" && existing != v {
-			logger.WarnContext(
+			c.logger.WarnContext(
 				ctx,
 				"control-plane extra header overrides existing header",
 				slog.String("header", k),
