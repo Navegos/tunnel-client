@@ -38,6 +38,8 @@ For the full surface (flags, defaults, advanced knobs), see [`configuration.md`]
 ### OAuth-protected MCP (supported)
 
 - `Authorization` headers are forwarded through tunnel-service to your MCP server.
+- Custom MCP request headers configured on the app are forwarded through tunnel-service, except
+  internal auth and IP-forwarding transport headers.
 - OAuth discovery GETs are forwarded to the tunnel-client; discovery payloads and `WWW-Authenticate resource_metadata` are rewritten to tunnel-service URLs for the same `tunnel_id`.
 - `authorization_servers[0]` from PRMD is the only source of truth and metadata fetch target for auth-server metadata enrichment and Harpoon OAuth target registration.
 - Auth-server metadata is accepted even when metadata `issuer` differs from `authorization_servers[0]` (external IdP issuer topologies are supported), and mismatch diagnostics are retained.
