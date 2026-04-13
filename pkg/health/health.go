@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
+	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/metrics"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
 	"go.opentelemetry.io/otel/metric"
@@ -104,6 +106,7 @@ type healthParams struct {
 	MeterProvider  *sdkmetric.MeterProvider
 	AdminMux       *http.ServeMux `name:"admin_mux"`
 	OAuthState     *oauth.DiscoveryState
+	MCPProbeState  *mcpclient.ProbeState `optional:"true"`
 }
 
 func newHealthService(p healthParams) (*healthService, error) {
@@ -114,7 +117,7 @@ func newHealthService(p healthParams) (*healthService, error) {
 	}
 
 	p.AdminMux.HandleFunc("/healthz", okHandler("live"))
-	p.AdminMux.HandleFunc("/readyz", readinessHandler(p.OAuthState))
+	p.AdminMux.HandleFunc("/readyz", readinessHandler(p.OAuthState, p.MCPProbeState))
 	p.AdminMux.Handle("/metrics", p.MetricExporter)
 
 	meter := p.MeterProvider.Meter("health")
@@ -144,7 +147,7 @@ func newHealthService(p healthParams) (*healthService, error) {
 		OnStart: func(ctx context.Context) error {
 			_, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
 				observer.ObserveInt64(livenessGauge, 1)
-				if isReady(p.OAuthState) {
+				if isReady(p.OAuthState, p.MCPProbeState) {
 					observer.ObserveInt64(readinessGauge, 1)
 				} else {
 					observer.ObserveInt64(readinessGauge, 0)
@@ -232,11 +235,9 @@ func isUnspecifiedHost(host string) bool {
 	return ip != nil && ip.IsUnspecified()
 }
 
-func isReady(state *oauth.DiscoveryState) bool {
-	if state == nil {
-		return true
-	}
-	return state.IsDone()
+func isReady(oauthState *oauth.DiscoveryState, probeState *mcpclient.ProbeState) bool {
+	status, _ := readinessStatus(oauthState, probeState)
+	return status == http.StatusOK
 }
 
 func okHandler(status string) http.HandlerFunc {
@@ -247,15 +248,76 @@ func okHandler(status string) http.HandlerFunc {
 	}
 }
 
-func readinessHandler(state *oauth.DiscoveryState) http.HandlerFunc {
+func readinessHandler(oauthState *oauth.DiscoveryState, probeState *mcpclient.ProbeState) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		if !isReady(state) {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("oauth discovery pending"))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready"))
+		statusCode, body := readinessStatus(oauthState, probeState)
+		w.WriteHeader(statusCode)
+		_, _ = w.Write([]byte(body))
 	}
+}
+
+func readinessStatus(oauthState *oauth.DiscoveryState, probeState *mcpclient.ProbeState) (int, string) {
+	if oauthState != nil && !oauthState.IsDone() {
+		return http.StatusServiceUnavailable, "oauth discovery pending"
+	}
+	if oauthState != nil {
+		if result, probe, _, err, ok := oauthState.Wait(10 * time.Millisecond); ok && err != nil {
+			if !isOptionalOAuthDiscoveryFailure(result, probe, err) {
+				return http.StatusServiceUnavailable, "oauth discovery failed: " + sanitizeReadinessError(err)
+			}
+		}
+	}
+	if probeState != nil && probeState.IsDone() {
+		if _, err, ok := probeState.Wait(10 * time.Millisecond); ok && err != nil {
+			if mcpclient.IsAuthRequiredProbeError(err) {
+				return http.StatusOK, "ready (mcp initialize requires auth: " + sanitizeReadinessError(err) + ")"
+			}
+			return http.StatusServiceUnavailable, "mcp probe failed: " + sanitizeReadinessError(err)
+		}
+	}
+	return http.StatusOK, "ready"
+}
+
+func sanitizeReadinessError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return strings.TrimSpace(err.Error())
+}
+
+func isOptionalOAuthDiscoveryFailure(
+	result *oauth.DiscoveryResult,
+	probe *oauth.WWWAuthenticateProbeStatus,
+	err error,
+) bool {
+	if err == nil {
+		return false
+	}
+	errText := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(errText, "oauth discovery disabled for transport") {
+		return true
+	}
+	if strings.Contains(errText, "oauth discovery server url is not configured") {
+		return true
+	}
+	if result == nil || !allDiscoveryAttemptsNotFound(result.Attempts) {
+		return false
+	}
+	if probe == nil || !probe.Attempted {
+		return false
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(probe.Error)), "got status 200")
+}
+
+func allDiscoveryAttemptsNotFound(attempts []oauth.DiscoveryAttempt) bool {
+	if len(attempts) == 0 {
+		return false
+	}
+	for _, attempt := range attempts {
+		if !attempt.Tried || attempt.StatusCode != http.StatusNotFound {
+			return false
+		}
+	}
+	return true
 }

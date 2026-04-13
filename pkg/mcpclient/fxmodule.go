@@ -27,6 +27,7 @@ import (
 var Module = fx.Module(
 	"mcpclient",
 	fx.Provide(
+		NewProbeState,
 		newMcpClient,
 		newStdioCommandTransportFactoryProvider,
 		newChannelStdioRuntimeInfoProvider,
@@ -61,11 +62,17 @@ type clientOutputs struct {
 type runnerParams struct {
 	fx.In
 
-	Config    *config.MCPConfig
-	Client    *mcp.Client
-	Transport mcp.Transport
-	Lifecycle fx.Lifecycle
-	Logger    *slog.Logger
+	Config     *config.MCPConfig
+	Client     *mcp.Client
+	Transport  mcp.Transport
+	Lifecycle  fx.Lifecycle
+	Logger     *slog.Logger
+	ProbeState *ProbeState
+}
+
+type probeSession interface {
+	Close() error
+	InitializeResult() *mcp.InitializeResult
 }
 
 func newMcpClient(p clientParams) (clientOutputs, error) {
@@ -125,6 +132,9 @@ func probeMcpServer(p runnerParams) error {
 		transportKind = p.Config.TransportKind
 	}
 	if transportKind != config.MCPTransportHTTPStreamable {
+		if p.ProbeState != nil {
+			p.ProbeState.Set(nil)
+		}
 		if p.Logger != nil {
 			p.Logger.Info("Skipping MCP probe for transport", slog.String("transport", string(transportKind)))
 		}
@@ -144,29 +154,15 @@ func probeMcpServer(p runnerParams) error {
 				slog.String("target", transportTargetLabel(transportKind, p.Config.ServerURL)),
 			)
 			go func() {
-				probeCtx, probeCancel := context.WithTimeout(ctx, defaultProbeTimeout)
-				defer probeCancel()
-				sess, err := p.Client.Connect(probeCtx, p.Transport, nil)
-				if err != nil {
-					logger.ErrorContext(ctx, "failed to connect to mcp", slog.String("error", err.Error()))
-					return
-				}
-				defer func() {
-					if err := sess.Close(); err != nil {
-						logger.WarnContext(ctx, "failed to close mcp session", slog.String("error", err.Error()))
-					}
-				}()
-				initRes := sess.InitializeResult()
-				logFields := []any{
-					slog.String("protocol_version", initRes.ProtocolVersion),
-				}
-				if initRes.ServerInfo != nil {
-					logFields = append(logFields, slog.String("server_name", initRes.ServerInfo.Name))
-					if initRes.ServerInfo.Version != "" {
-						logFields = append(logFields, slog.String("server_version", initRes.ServerInfo.Version))
-					}
-				}
-				logger.InfoContext(ctx, "mcp session initialized", logFields...)
+				runStartupProbe(
+					ctx,
+					defaultProbeTimeout,
+					func(probeCtx context.Context) (probeSession, error) {
+						return p.Client.Connect(probeCtx, p.Transport, nil)
+					},
+					logger,
+					p.ProbeState,
+				)
 			}()
 			return nil
 		},
@@ -177,6 +173,76 @@ func probeMcpServer(p runnerParams) error {
 	})
 
 	return nil
+}
+
+func runStartupProbe(
+	ctx context.Context,
+	timeout time.Duration,
+	connect func(context.Context) (probeSession, error),
+	logger *slog.Logger,
+	probeState *ProbeState,
+) {
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	type result struct {
+		session probeSession
+		err     error
+	}
+
+	resultCh := make(chan result, 1)
+	go func() {
+		sess, err := connect(probeCtx)
+		resultCh <- result{session: sess, err: err}
+	}()
+
+	select {
+	case <-probeCtx.Done():
+		err := fmt.Errorf("mcp startup probe failed: %w", probeCtx.Err())
+		if probeState != nil {
+			probeState.Set(err)
+		}
+		if logger != nil {
+			logger.ErrorContext(ctx, "mcp startup probe failed", slog.String("error", err.Error()))
+		}
+	case res := <-resultCh:
+		if res.err != nil {
+			if probeState != nil {
+				probeState.Set(res.err)
+			}
+			if logger != nil {
+				logger.ErrorContext(ctx, "failed to connect to mcp", slog.String("error", res.err.Error()))
+			}
+			return
+		}
+		if probeState != nil {
+			probeState.Set(nil)
+		}
+		if res.session == nil {
+			if logger != nil {
+				logger.WarnContext(ctx, "mcp probe returned nil session")
+			}
+			return
+		}
+		defer func() {
+			if err := res.session.Close(); err != nil && logger != nil {
+				logger.WarnContext(ctx, "failed to close mcp session", slog.String("error", err.Error()))
+			}
+		}()
+		initRes := res.session.InitializeResult()
+		logFields := []any{
+			slog.String("protocol_version", initRes.ProtocolVersion),
+		}
+		if initRes.ServerInfo != nil {
+			logFields = append(logFields, slog.String("server_name", initRes.ServerInfo.Name))
+			if initRes.ServerInfo.Version != "" {
+				logFields = append(logFields, slog.String("server_version", initRes.ServerInfo.Version))
+			}
+		}
+		if logger != nil {
+			logger.InfoContext(ctx, "mcp session initialized", logFields...)
+		}
+	}
 }
 
 type slogWriter struct {

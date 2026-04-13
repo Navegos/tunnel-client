@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/harpoon"
@@ -28,6 +29,8 @@ type ChannelStatus struct {
 	Enabled       bool                    `json:"enabled"`
 	ServerKind    MCPServerKind           `json:"server_kind"`
 	TransportKind config.MCPTransportKind `json:"transport_kind,omitempty"`
+	ProbeStatus   string                  `json:"probe_status,omitempty"`
+	ProbeError    string                  `json:"probe_error,omitempty"`
 	Reason        string                  `json:"reason,omitempty"`
 	Details       []ChannelStatusDetail   `json:"details,omitempty"`
 }
@@ -43,14 +46,15 @@ func BuildChannelStatuses(
 	mcpCfg *config.MCPConfig,
 	harpoonRegistry *harpoon.Registry,
 	stdioInfoProvider mcpclient.ChannelStdioRuntimeInfoProvider,
+	probeState *mcpclient.ProbeState,
 ) []ChannelStatus {
 	statuses := make([]ChannelStatus, 0, 4)
 	if mcpCfg == nil || len(mcpCfg.ChannelBindings) == 0 {
-		statuses = append(statuses, buildFallbackMainChannelStatus(mcpCfg, stdioInfoProvider))
+		statuses = append(statuses, buildFallbackMainChannelStatus(mcpCfg, stdioInfoProvider, probeState))
 	} else {
 		entries := make([]ChannelStatus, 0, len(mcpCfg.ChannelBindings))
 		for _, binding := range mcpCfg.ChannelBindings {
-			entries = append(entries, buildChannelStatus(binding, stdioInfoProvider))
+			entries = append(entries, buildChannelStatus(binding, stdioInfoProvider, probeState))
 		}
 		sort.SliceStable(entries, func(i, j int) bool {
 			return entries[i].Name < entries[j].Name
@@ -61,7 +65,7 @@ func BuildChannelStatuses(
 	return statuses
 }
 
-func buildFallbackMainChannelStatus(mcpCfg *config.MCPConfig, stdioInfoProvider mcpclient.ChannelStdioRuntimeInfoProvider) ChannelStatus {
+func buildFallbackMainChannelStatus(mcpCfg *config.MCPConfig, stdioInfoProvider mcpclient.ChannelStdioRuntimeInfoProvider, probeState *mcpclient.ProbeState) ChannelStatus {
 	status := ChannelStatus{
 		Name:       types.DefaultChannel.String(),
 		ServerKind: MCPServerKindExternal,
@@ -126,10 +130,11 @@ func buildFallbackMainChannelStatus(mcpCfg *config.MCPConfig, stdioInfoProvider 
 		status.Reason = fmt.Sprintf("unsupported mcp transport %q", transportKind)
 	}
 
+	applyMainChannelProbeStatus(&status, probeState)
 	return status
 }
 
-func buildChannelStatus(binding config.MCPChannelBinding, stdioInfoProvider mcpclient.ChannelStdioRuntimeInfoProvider) ChannelStatus {
+func buildChannelStatus(binding config.MCPChannelBinding, stdioInfoProvider mcpclient.ChannelStdioRuntimeInfoProvider, probeState *mcpclient.ProbeState) ChannelStatus {
 	status := ChannelStatus{
 		Name:       binding.Channel.Canonical().String(),
 		ServerKind: MCPServerKindExternal,
@@ -187,7 +192,39 @@ func buildChannelStatus(binding config.MCPChannelBinding, stdioInfoProvider mcpc
 		status.TransportKind = mcpTransportUnknown
 		status.Reason = fmt.Sprintf("unsupported mcp transport %q", transportKind)
 	}
+	if binding.Channel.Canonical() == types.DefaultChannel {
+		applyMainChannelProbeStatus(&status, probeState)
+	}
 	return status
+}
+
+func applyMainChannelProbeStatus(status *ChannelStatus, probeState *mcpclient.ProbeState) {
+	if status == nil || probeState == nil || !status.Enabled {
+		return
+	}
+	if !probeState.IsDone() {
+		status.ProbeStatus = "pending"
+		return
+	}
+	if _, err, ok := probeState.Wait(10 * time.Millisecond); ok {
+		if err == nil {
+			status.ProbeStatus = "ok"
+			return
+		}
+		status.ProbeError = err.Error()
+		if mcpclient.IsAuthRequiredProbeError(err) {
+			status.ProbeStatus = "auth-required"
+			if status.Reason == "" {
+				status.Reason = "mcp initialize requires auth"
+			}
+			return
+		}
+		status.ProbeStatus = "failed"
+		status.Enabled = false
+		if status.Reason == "" {
+			status.Reason = "initial mcp probe failed"
+		}
+	}
 }
 
 func fillStdioRuntimeDetails(provider mcpclient.ChannelStdioRuntimeInfoProvider, channel types.Channel, pid string, command string) (string, string) {

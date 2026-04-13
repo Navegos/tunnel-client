@@ -48,12 +48,14 @@ func TestBuildStatusIncludesChannels(t *testing.T) {
 				},
 			},
 		},
-		HarpoonReg: registry,
+		HarpoonReg:    registry,
+		MCPProbeState: mcpclient.NewProbeState(),
 	})
 
 	require.Len(t, out.Channels, 2)
 	require.Equal(t, types.DefaultChannel.String(), out.Channels[0].Name)
 	require.True(t, out.Channels[0].Enabled)
+	require.Equal(t, "pending", out.Channels[0].ProbeStatus)
 	require.Equal(t, MCPServerKindExternal, out.Channels[0].ServerKind)
 	require.Equal(t, config.MCPTransportHTTPStreamable, out.Channels[0].TransportKind)
 	require.Equal(t, []ChannelStatusDetail{
@@ -118,3 +120,43 @@ func TestBuildStatusIncludesStdioChannelDetails(t *testing.T) {
 		},
 	}, out.Channels[0].Details)
 }
+
+func TestBuildStatusIncludesMainChannelProbeFailure(t *testing.T) {
+	buffer := NewLogBufferWithCapacity(1)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	registry, err := harpoon.NewRegistry(logger, false, nil)
+	require.NoError(t, err)
+
+	serverURL, err := url.Parse("https://example.com/mcp")
+	require.NoError(t, err)
+
+	probeState := mcpclient.NewProbeState()
+	probeState.Set(assertiveError("dial tcp 127.0.0.1:1: connection refused"))
+
+	out := buildStatus(routeParams{
+		Buffer: buffer,
+		MCPConfig: &config.MCPConfig{
+			ServerURL: serverURL,
+			ChannelBindings: []config.MCPChannelBinding{
+				{
+					Channel:       types.DefaultChannel,
+					TransportKind: config.MCPTransportHTTPStreamable,
+					ServerURL:     serverURL,
+				},
+			},
+		},
+		HarpoonReg:    registry,
+		MCPProbeState: probeState,
+	})
+
+	require.Len(t, out.Channels, 2)
+	require.False(t, out.Channels[0].Enabled)
+	require.Equal(t, "failed", out.Channels[0].ProbeStatus)
+	require.Contains(t, out.Channels[0].ProbeError, "connection refused")
+	require.Equal(t, "initial mcp probe failed", out.Channels[0].Reason)
+}
+
+type assertiveError string
+
+func (e assertiveError) Error() string { return string(e) }

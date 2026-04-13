@@ -47,7 +47,9 @@ func TestAppBoots(t *testing.T) {
 			PIDFile: pidPath,
 		},
 		MCP: config.MCPConfig{
-			ServerURL:             mustParseURL(t, "http://127.0.0.1"),
+			TransportKind:         config.MCPTransportStdio,
+			Command:               "cat",
+			CommandArgs:           []string{"cat"},
 			ConnectionMaxTTL:      time.Minute,
 			MaxConcurrentRequests: 10,
 		},

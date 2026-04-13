@@ -2,10 +2,13 @@ package mcpclient
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"log/slog"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openai.org/api/tunnel-client/pkg/config"
@@ -13,6 +16,20 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/types"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
+
+type fakeProbeSession struct {
+	initResult mcp.InitializeResult
+	closed     bool
+}
+
+func (s *fakeProbeSession) Close() error {
+	s.closed = true
+	return nil
+}
+
+func (s *fakeProbeSession) InitializeResult() *mcp.InitializeResult {
+	return &s.initResult
+}
 
 func TestNewMcpClient_DefaultTransport(t *testing.T) {
 	params := clientParams{
@@ -139,6 +156,90 @@ func TestNewMcpClient_LoggingTransportRequiresDebugLevel(t *testing.T) {
 
 	if _, ok := outputs.Transport.(*mcp.StreamableClientTransport); !ok {
 		t.Fatalf("expected raw transport to be streamable; got %T", outputs.Transport)
+	}
+}
+
+func TestRunStartupProbeMarksSuccess(t *testing.T) {
+	t.Parallel()
+
+	state := NewProbeState()
+	session := &fakeProbeSession{
+		initResult: mcp.InitializeResult{
+			ProtocolVersion: "2025-03-26",
+			ServerInfo:      &mcp.Implementation{Name: "fixture", Version: "1.0.0"},
+		},
+	}
+
+	runStartupProbe(
+		context.Background(),
+		50*time.Millisecond,
+		func(context.Context) (probeSession, error) {
+			return session, nil
+		},
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		state,
+	)
+
+	_, err, ok := state.Wait(10 * time.Millisecond)
+	if !ok {
+		t.Fatalf("expected probe state to complete")
+	}
+	if err != nil {
+		t.Fatalf("expected nil probe error, got %v", err)
+	}
+	if !session.closed {
+		t.Fatalf("expected probe session to be closed")
+	}
+}
+
+func TestRunStartupProbeMarksFailure(t *testing.T) {
+	t.Parallel()
+
+	state := NewProbeState()
+
+	runStartupProbe(
+		context.Background(),
+		50*time.Millisecond,
+		func(context.Context) (probeSession, error) {
+			return nil, errors.New("boom")
+		},
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		state,
+	)
+
+	_, err, ok := state.Wait(10 * time.Millisecond)
+	if !ok {
+		t.Fatalf("expected probe state to complete")
+	}
+	if err == nil || err.Error() != "boom" {
+		t.Fatalf("expected probe error boom, got %v", err)
+	}
+}
+
+func TestRunStartupProbeMarksFailureWhenConnectHangs(t *testing.T) {
+	t.Parallel()
+
+	state := NewProbeState()
+	release := make(chan struct{})
+
+	runStartupProbe(
+		context.Background(),
+		20*time.Millisecond,
+		func(context.Context) (probeSession, error) {
+			<-release
+			return nil, nil
+		},
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		state,
+	)
+	close(release)
+
+	_, err, ok := state.Wait(10 * time.Millisecond)
+	if !ok {
+		t.Fatalf("expected probe state to complete")
+	}
+	if err == nil || !strings.Contains(err.Error(), "mcp startup probe failed") {
+		t.Fatalf("expected startup probe failure, got %v", err)
 	}
 }
 

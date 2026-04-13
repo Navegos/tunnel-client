@@ -1,9 +1,11 @@
 package adminui
 
 import (
+	"errors"
 	"testing"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/proxy"
 	"go.openai.org/api/tunnel-client/pkg/proxyhealth"
 )
@@ -65,5 +67,18 @@ func TestBuildSystemProxySnapshot(t *testing.T) {
 	}
 	if len(system.ProxyHealth) != 1 {
 		t.Fatalf("expected proxy health entries")
+	}
+}
+
+func TestBuildSystemIncludesMainChannelProbeStatus(t *testing.T) {
+	probeState := mcpclient.NewProbeState()
+	probeState.Set(errors.New(`calling "initialize": Unauthorized`))
+
+	system := buildSystem(routeParams{MCPProbeState: probeState})
+	if system.MainChannelProbeStatus != "auth-required" {
+		t.Fatalf("expected auth-required probe status, got %q", system.MainChannelProbeStatus)
+	}
+	if system.MainChannelProbeError == "" {
+		t.Fatalf("expected probe error to be surfaced")
 	}
 }

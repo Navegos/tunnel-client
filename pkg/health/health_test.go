@@ -1,6 +1,7 @@
 package health
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
 )
 
@@ -167,7 +169,7 @@ func TestReadinessHandler(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 		rec := httptest.NewRecorder()
 
-		readinessHandler(nil)(rec, req)
+		readinessHandler(nil, nil)(rec, req)
 
 		res := rec.Result()
 		require.Equal(t, http.StatusOK, res.StatusCode)
@@ -181,7 +183,7 @@ func TestReadinessHandler(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 		rec := httptest.NewRecorder()
 
-		readinessHandler(state)(rec, req)
+		readinessHandler(state, nil)(rec, req)
 
 		res := rec.Result()
 		require.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
@@ -196,11 +198,132 @@ func TestReadinessHandler(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 		rec := httptest.NewRecorder()
 
-		readinessHandler(state)(rec, req)
+		readinessHandler(state, nil)(rec, req)
 
 		res := rec.Result()
 		require.Equal(t, http.StatusOK, res.StatusCode)
 	})
+
+	t.Run("NotReadyWhenOAuthDiscoveryFails", func(t *testing.T) {
+		t.Parallel()
+
+		state := oauth.NewDiscoveryState()
+		state.Set(nil, errors.New("metadata fetch failed"), nil, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(state, nil)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
+		require.Contains(t, rec.Body.String(), "oauth discovery failed")
+	})
+
+	t.Run("ReadyWhenOAuthDiscoveryIsDisabledForNonHTTPTransport", func(t *testing.T) {
+		t.Parallel()
+
+		state := oauth.NewDiscoveryState()
+		state.Set(nil, errors.New(`oauth discovery disabled for transport "stdio"`), nil, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(state, nil)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusOK, res.StatusCode)
+		require.Equal(t, "ready", rec.Body.String())
+	})
+
+	t.Run("ReadyWhenOAuthDiscoveryServerURLIsNotConfigured", func(t *testing.T) {
+		t.Parallel()
+
+		state := oauth.NewDiscoveryState()
+		state.Set(nil, errors.New("oauth discovery server URL is not configured"), nil, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(state, nil)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusOK, res.StatusCode)
+		require.Equal(t, "ready", rec.Body.String())
+	})
+
+	t.Run("ReadyWhenOAuthDiscoveryIsNotAdvertised", func(t *testing.T) {
+		t.Parallel()
+
+		state := oauth.NewDiscoveryState()
+		state.Set(&oauth.DiscoveryResult{
+			Attempts: []oauth.DiscoveryAttempt{
+				{
+					URL:        "http://localhost:3001/.well-known/oauth-protected-resource/mcp",
+					Source:     oauth.DiscoverySourceWellKnownPath,
+					Tried:      true,
+					StatusCode: http.StatusNotFound,
+				},
+				{
+					URL:        "http://localhost:3001/.well-known/oauth-protected-resource",
+					Source:     oauth.DiscoverySourceWellKnownRoot,
+					Tried:      true,
+					StatusCode: http.StatusNotFound,
+				},
+			},
+		}, errors.New("oauth discovery invalid metadata from http://localhost:3001/.well-known/oauth-protected-resource: decode protected resource metadata: invalid character '<' looking for beginning of value"), &oauth.WWWAuthenticateProbeStatus{
+			Attempted: true,
+			Error:     "oauth discovery: WWW-Authenticate probe GET got status 200",
+		}, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(state, nil)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusOK, res.StatusCode)
+		require.Equal(t, "ready", rec.Body.String())
+	})
+
+	t.Run("ReadyButExplicitWhenMCPInitializeRequiresAuth", func(t *testing.T) {
+		t.Parallel()
+
+		oauthState := oauth.NewDiscoveryState()
+		oauthState.Set(nil, nil, nil, nil)
+
+		probeState := mcpclient.NewProbeState()
+		probeState.Set(errors.New(`calling "initialize": Unauthorized`))
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(oauthState, probeState)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusOK, res.StatusCode)
+		require.Contains(t, rec.Body.String(), "requires auth")
+	})
+
+	t.Run("NotReadyWhenMCPProbeFails", func(t *testing.T) {
+		t.Parallel()
+
+		oauthState := oauth.NewDiscoveryState()
+		oauthState.Set(nil, nil, nil, nil)
+
+		probeState := mcpclient.NewProbeState()
+		probeState.Set(errors.New("dial tcp 127.0.0.1:1: connection refused"))
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rec := httptest.NewRecorder()
+
+		readinessHandler(oauthState, probeState)(rec, req)
+
+		res := rec.Result()
+		require.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
+		require.Contains(t, rec.Body.String(), "mcp probe failed")
+	})
+
 }
 
 type fakeAddr struct{}

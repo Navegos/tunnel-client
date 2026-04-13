@@ -54,6 +54,7 @@ type routeParams struct {
 	HarpoonBuffer *harpoon.CallBuffer
 	HarpoonReg    *harpoon.Registry
 	StdioInfo     mcpclient.ChannelStdioRuntimeInfoProvider `optional:"true"`
+	MCPProbeState *mcpclient.ProbeState                     `optional:"true"`
 	ProxyHealth   proxyhealth.Snapshotter                   `optional:"true"`
 	TLSBundle     *tlsconfig.Bundle
 }
@@ -179,7 +180,7 @@ func buildStatus(p routeParams) statusResponse {
 			}
 		}
 	}
-	out.Channels = BuildChannelStatuses(p.MCPConfig, p.HarpoonReg, p.StdioInfo)
+	out.Channels = BuildChannelStatuses(p.MCPConfig, p.HarpoonReg, p.StdioInfo, p.MCPProbeState)
 	if p.ProxyHealth != nil {
 		controlRoute, mcpRoutes := splitProxyRoutes(p.ProxyHealth.RouteSummaries())
 		out.ControlPlaneRoute = controlRoute
