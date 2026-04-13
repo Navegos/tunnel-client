@@ -93,6 +93,38 @@ func TestNewSharedConnectionTransportReconnectsAfterClose(t *testing.T) {
 	require.Equal(t, 2, closer.connectCalls)
 }
 
+func TestNewSharedConnectionTransportReconnectsAfterForwardingWriteError(t *testing.T) {
+	t.Parallel()
+
+	writeErr := errors.New("write failed")
+	var base *countingTransport
+	base = &countingTransport{
+		connectFn: func() (mcp.Connection, error) {
+			if base.connectCalls == 0 {
+				return &closeTrackingConn{writeErr: writeErr}, nil
+			}
+			return &closeTrackingConn{}, nil
+		},
+	}
+
+	forwarding := NewForwardingTransport(NewSharedConnectionTransport(base))
+	require.NotNil(t, forwarding)
+
+	conn, err := forwarding.Connect(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	req := &jsonrpc.Request{Method: "testMethod"}
+	_, _, err = conn.Write(context.Background(), nil, req)
+	require.ErrorIs(t, err, writeErr)
+
+	conn2, err := forwarding.Connect(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, conn2)
+	require.NotSame(t, conn, conn2)
+	require.Equal(t, 2, base.connectCalls)
+}
+
 type countingTransport struct {
 	connectCalls int
 	connectFn    func() (mcp.Connection, error)
@@ -112,10 +144,22 @@ func (fakeSharedConn) Close() error                                  { return ni
 func (fakeSharedConn) SessionID() string                             { return "" }
 
 type closeTrackingConn struct {
-	closed int
+	closed   int
+	readErr  error
+	writeErr error
 }
 
-func (c *closeTrackingConn) Read(context.Context) (jsonrpc.Message, error) { return nil, nil }
-func (c *closeTrackingConn) Write(context.Context, jsonrpc.Message) error  { return nil }
-func (c *closeTrackingConn) Close() error                                  { c.closed++; return nil }
-func (c *closeTrackingConn) SessionID() string                             { return "" }
+func (c *closeTrackingConn) Read(context.Context) (jsonrpc.Message, error) {
+	return nil, c.readErr
+}
+
+func (c *closeTrackingConn) Write(context.Context, jsonrpc.Message) error {
+	return c.writeErr
+}
+
+func (c *closeTrackingConn) Close() error {
+	c.closed++
+	return nil
+}
+
+func (c *closeTrackingConn) SessionID() string { return "" }

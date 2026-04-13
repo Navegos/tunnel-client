@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -117,6 +118,48 @@ func TestTunnelsHelpUsesSubcommandHelp(t *testing.T) {
 
 	help := out.String()
 	require.Contains(t, help, "create")
+}
+
+func TestTunnelSubcommandExamplesUseAdminPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "create",
+			args: []string{"tunnels", "create", "--help"},
+		},
+		{
+			name: "update",
+			args: []string{"tunnels", "update", "--help"},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var out bytes.Buffer
+			root := NewAdminCommand(func(key string) (string, bool) {
+				if key == "OPENAI_ADMIN_KEY" {
+					return "admin", true
+				}
+				return "", false
+			}, &out, io.Discard)
+
+			root.SetArgs(tc.args)
+			err := root.Execute()
+			require.NoError(t, err)
+
+			help := out.String()
+			require.Contains(t, help, "tunnel-client admin tunnels "+tc.name)
+			require.NotContains(t, help, "tunnel-client tunnels "+tc.name)
+			require.True(t, strings.Contains(help, "Examples:") || strings.Contains(help, "Example:"))
+		})
+	}
 }
 
 func TestCreateRejectsDuplicateScope(t *testing.T) {

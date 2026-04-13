@@ -356,13 +356,6 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 		return fmt.Errorf("unexpected command type %T", cmd.Message())
 	}
 
-	// Establish MCP connection only for JSON-RPC commands.
-	conn, err := channelCfg.transport.Connect(ctx)
-	if err != nil {
-		logger.ErrorContext(ctx, "failed to connect to MCP transport", slog.String("error", err.Error()))
-		return fmt.Errorf("connect: %w", err)
-	}
-
 	isNotification := !req.ID.IsValid()
 	if !isNotification {
 		ctx = tunnelctx.ContextWithRPCRequestID(ctx, req.ID)
@@ -372,6 +365,50 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 	requestKindAttrs := requestKindAttributes(req)
 	requestKindAttrs = append(requestKindAttrs, attribute.String("channel", channel.String()))
 	latencyRecorded := &latencyFlags{}
+
+	// Establish MCP connection only for JSON-RPC commands.
+	conn, err := channelCfg.transport.Connect(ctx)
+	if err != nil {
+		logger.ErrorContext(ctx, "failed to connect to MCP transport", slog.String("error", err.Error()))
+		if isNotification {
+			return fmt.Errorf("connect: %w", err)
+		}
+
+		status := normalizeTransportStatusCode(0, err)
+		encodedError, encodeErr := buildJSONRPCErrorResponse(req, status, err)
+		if encodeErr != nil {
+			logger.ErrorContext(ctx, "failed to encode MCP error response", slog.String("error", encodeErr.Error()))
+			return fmt.Errorf("encode error response: %w", encodeErr)
+		}
+
+		respHeader := http.Header{}
+		respHeader.Set("Content-Type", "application/json")
+
+		tunnelResponse := types.NewTunnelResponse(channel, encodedError, status, respHeader)
+		tsRequestID, postErr := p.tunnelResponder.PostResponse(ctx, requestID, tunnelResponse)
+		if postErr != nil {
+			attrs := []any{slog.String("error", postErr.Error())}
+			if tsRequestID != "" {
+				attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+			}
+			logger.ErrorContext(ctx, "failed to post error response to control plane", attrs...)
+			return postErr
+		}
+
+		p.metrics.recordCommandLatencies(ctx, p.tunnelID, status, requestKindAttrs, cmd.EnqueuedAt(), cmd.PolledAt(), latencyRecorded)
+		attrs := []any{
+			slog.Int("status_code", status),
+			slog.String("channel", channel.String()),
+			slog.String("rpc_method", req.Method),
+			slog.String("error", err.Error()),
+		}
+		attrs = append(attrs, mcpServerURLAttrs(p.mcpServerURL)...)
+		if tsRequestID != "" {
+			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+		}
+		logger.WarnContext(ctx, "dispatcher failed to connect to MCP transport; posted error response to control plane", attrs...)
+		return nil
+	}
 
 	//TODO(denyska): upon receiving SessionTermination command, issue conn.Close() that will do DELETE
 

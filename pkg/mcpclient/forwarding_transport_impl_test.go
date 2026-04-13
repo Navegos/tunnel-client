@@ -73,6 +73,61 @@ func TestForwardingConnectionPropagatesHeaders(t *testing.T) {
 	if diff := cmp.Diff(requestHeaders, fake.lastForwardedHeader, sortStrings); diff != "" {
 		t.Fatalf("request headers mismatch (-want +got):\n%s", diff)
 	}
+	if fake.closeCalls != 0 {
+		t.Fatalf("unexpected close calls on successful write/read path: got %d", fake.closeCalls)
+	}
+}
+
+func TestForwardingConnectionWriteErrorClosesBase(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("write failed")
+	fake := &fakeConnection{
+		writeFunc: func(context.Context, jsonrpc.Message) error {
+			return wantErr
+		},
+	}
+
+	conn := &forwardingConnection{base: fake}
+	req := &jsonrpc.Request{ID: mustMakeID(t, "call-write-error"), Method: "testMethod"}
+
+	status, headers, err := conn.Write(context.Background(), nil, req)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Write returned error %v, want %v", err, wantErr)
+	}
+	if status != 0 {
+		t.Fatalf("unexpected status code: got %d want 0", status)
+	}
+	if headers != nil {
+		t.Fatalf("expected nil headers, got %v", headers)
+	}
+	if fake.closeCalls != 1 {
+		t.Fatalf("expected Close to be called once, got %d", fake.closeCalls)
+	}
+}
+
+func TestForwardingConnectionReadErrorClosesBase(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("read failed")
+	fake := &fakeConnection{
+		readFunc: func(context.Context) (jsonrpc.Message, error) {
+			return nil, wantErr
+		},
+	}
+
+	conn := &forwardingConnection{base: fake}
+
+	msg, err := conn.Read(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Read returned error %v, want %v", err, wantErr)
+	}
+	if msg != nil {
+		t.Fatalf("expected nil message, got %T", msg)
+	}
+	if fake.closeCalls != 1 {
+		t.Fatalf("expected Close to be called once, got %d", fake.closeCalls)
+	}
 }
 
 func TestForwardingTransportConnectNilBaseReturnsNil(t *testing.T) {
@@ -173,6 +228,7 @@ type fakeConnection struct {
 	writeFunc           func(context.Context, jsonrpc.Message) error
 	readFunc            func(context.Context) (jsonrpc.Message, error)
 	lastForwardedHeader http.Header
+	closeCalls          int
 }
 
 func (f *fakeConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
@@ -192,7 +248,11 @@ func (f *fakeConnection) Write(ctx context.Context, msg jsonrpc.Message) error {
 	return f.writeFunc(ctx, msg)
 }
 
-func (f *fakeConnection) Close() error      { return nil }
+func (f *fakeConnection) Close() error {
+	f.closeCalls++
+	return nil
+}
+
 func (f *fakeConnection) SessionID() string { return "" }
 
 func mustMakeID(tb testing.TB, v any) jsonrpc.ID {

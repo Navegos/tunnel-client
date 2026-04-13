@@ -1097,7 +1097,7 @@ func TestProcessorRecordsNotificationLatency(t *testing.T) {
 	}
 }
 
-func TestProcessorConnectFailureDoesNotRecordLatency(t *testing.T) {
+func TestProcessorConnectFailureReturnsTerminalErrorResponseAndRecordsLatency(t *testing.T) {
 	t.Parallel()
 
 	reader := sdkmetric.NewManualReader()
@@ -1109,6 +1109,8 @@ func TestProcessorConnectFailureDoesNotRecordLatency(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	responder := newRecordingResponder()
 	transport := &failingForwardingTransport{err: errors.New("connect failed")}
+	callID, err := jsonrpc.MakeID("connect-failure-call")
+	require.NoError(t, err)
 
 	processor, err := NewProcessor(processorParams{
 		Logger:          logger,
@@ -1121,28 +1123,64 @@ func TestProcessorConnectFailureDoesNotRecordLatency(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	enqueuedAt := time.Now().Add(-500 * time.Millisecond)
+
 	cmd := &fakePolledCommand{
 		id:         types.RequestID("connect-failure"),
-		message:    &jsonrpc.Request{Method: "initialize"},
-		enqueuedAt: time.Now(),
-		polledAt:   time.Now(),
+		message:    &jsonrpc.Request{ID: callID, Method: "initialize"},
+		enqueuedAt: enqueuedAt,
+		polledAt:   enqueuedAt,
 		shardToken: "shard-connect-failure",
 	}
 
-	err = processor.Process(context.Background(), cmd)
-	require.Error(t, err)
+	require.NoError(t, processor.Process(context.Background(), cmd))
 
-	select {
-	case resp := <-responder.responses:
-		t.Fatalf("unexpected response posted: %+v", resp)
-	default:
-	}
+	resp := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, resp.requestID)
+	require.Equal(t, types.ResponseTypeJSONRPCResponse, resp.response.Type())
+	require.Equal(t, http.StatusBadGateway, resp.response.ResponseCode())
+	require.Equal(t, "application/json", resp.response.Headers().Get("Content-Type"))
+
+	rpcResp := decodeJSONRPCResponse(t, resp.response.Payload())
+	require.NotNil(t, rpcResp)
+	require.Equal(t, callID, rpcResp.ID)
+	require.NotNil(t, rpcResp.Error)
+	require.Contains(t, rpcResp.Error.Error(), "Bad Gateway")
+	require.Contains(t, rpcResp.Error.Error(), "connect failed")
 
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm))
 
-	if histogram, ok := findHistogram(rm, metricNameCommandEndToEndLatency); ok {
-		require.Len(t, histogram.DataPoints, 0, "latency metrics should not record on connect failure")
+	histogram, ok := findHistogram(rm, metricNameCommandEndToEndLatency)
+	require.True(t, ok, "command_end_to_end_latency_milliseconds metric not found")
+	require.Len(t, histogram.DataPoints, 2)
+
+	dpByType := dataPointsByLatencyType(t, histogram.DataPoints)
+
+	enqueuedDP := dpByType["enqueue_to_response"]
+	require.EqualValues(t, 1, enqueuedDP.Count)
+	require.InDelta(t, float64(time.Since(enqueuedAt)/time.Millisecond), enqueuedDP.Sum, 250)
+
+	pollDP := dpByType["poll_to_response"]
+	require.EqualValues(t, 1, pollDP.Count)
+	require.Greater(t, pollDP.Sum, 0.0)
+
+	for _, dp := range []metricdata.HistogramDataPoint[float64]{enqueuedDP, pollDP} {
+		requestKind, ok := dp.Attributes.Value(attribute.Key("request_kind"))
+		require.True(t, ok)
+		require.Equal(t, "call", requestKind.AsString())
+
+		requestMethod, ok := dp.Attributes.Value(attribute.Key("request_method"))
+		require.True(t, ok)
+		require.Equal(t, "initialize", requestMethod.AsString())
+
+		tunnelID, ok := dp.Attributes.Value(attribute.Key("tunnel_id"))
+		require.True(t, ok)
+		require.Equal(t, "test-tunnel", tunnelID.AsString())
+
+		status, ok := dp.Attributes.Value(attribute.Key("tunnel_service_status"))
+		require.True(t, ok)
+		require.EqualValues(t, http.StatusBadGateway, status.AsInt64())
 	}
 }
 

@@ -52,14 +52,14 @@ func newTunnelCreateCmd(lookupEnv func(string) (string, bool)) *cobra.Command {
 		Long:  "Create a tunnel with organization/workspace attachments. At least one org or workspace ID is required.",
 		Example: strings.TrimSpace(`
   # Create with org + workspace scope
-  tunnel-client tunnels create \
+  tunnel-client admin tunnels create \
     --name "My Tunnel" \
     --description "Routes to prod MCP" \
     --organization-id org_123 \
     --workspace-id ws_456
 
   # Create scoped only to a workspace
-  tunnel-client tunnels create \
+  tunnel-client admin tunnels create \
     --name "Workspace Only" \
     --description "WS-only tunnel" \
     --workspace-id ws_456
@@ -183,10 +183,10 @@ func newTunnelUpdateCmd(lookupEnv func(string) (string, bool)) *cobra.Command {
 			"Organization/workspace lists are PUT-like replacements; omit the flags to keep existing edges.",
 		Example: strings.TrimSpace(`
   # Rename a tunnel and keep existing org/workspace edges
-  tunnel-client tunnels update tunnel_abc --name "New Name"
+  tunnel-client admin tunnels update tunnel_abc --name "New Name"
 
   # Replace org/workspace scopes explicitly (PUT-like)
-  tunnel-client tunnels update tunnel_abc \
+  tunnel-client admin tunnels update tunnel_abc \
     --organization-id org_123 \
     --workspace-id ws_456 \
     --description "New description"

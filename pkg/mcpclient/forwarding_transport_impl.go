@@ -64,6 +64,10 @@ func (c *forwardingConnection) Write(ctx context.Context, header http.Header, ms
 		statusCode, respHeaders = carrier.ResponseStatusAndHeaders()
 	}
 
+	if err != nil {
+		_ = c.base.Close()
+	}
+
 	return statusCode, respHeaders, err
 }
 
@@ -72,5 +76,8 @@ func (c *forwardingConnection) Read(ctx context.Context) (jsonrpc.Message, error
 		return nil, nil
 	}
 	msg, err := c.base.Read(ctx)
+	if err != nil {
+		_ = c.base.Close()
+	}
 	return msg, err
 }
