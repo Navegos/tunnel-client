@@ -47,14 +47,31 @@ func (m *MetadataState) Wait(timeout time.Duration) (*TunnelMetadata, error, boo
 	if m == nil {
 		return nil, nil, false
 	}
+
+	select {
+	case <-m.done:
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.metadata, m.err, true
+	default:
+	}
+
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+
 	select {
 	case <-m.done:
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		return m.metadata, m.err, true
 	case <-timer.C:
-		return nil, nil, false
+		select {
+		case <-m.done:
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.metadata, m.err, true
+		default:
+			return nil, nil, false
+		}
 	}
 }
