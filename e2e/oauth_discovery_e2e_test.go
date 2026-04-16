@@ -141,7 +141,9 @@ func TestOAuthDiscoveryRegistersCustomerHostRegistrationEndpointE2E(t *testing.T
 		discoveryID      = "cmd-oauth-customer-host"
 		harpoonInitID    = "cmd-harpoon-init-after-oauth"
 		harpoonReadyID   = "cmd-harpoon-ready-after-oauth"
+		harpoonListID    = "cmd-harpoon-list-targets-after-oauth"
 		harpoonCallID    = "cmd-harpoon-auth-metadata"
+		harpoonListRPCID = "call-list-targets"
 		harpoonJSONRPCID = "call-auth-metadata"
 	)
 	customerBase := "http://" + customerHost
@@ -347,6 +349,71 @@ func TestOAuthDiscoveryRegistersCustomerHostRegistrationEndpointE2E(t *testing.T
 		}},
 	}
 
+	harpoonListTargets := mocktunnelservice.CommandResponse{
+		Command: newChannelCommand(
+			harpoonListID,
+			types.ChannelHarpoon.String(),
+			json.RawMessage(`{
+				"jsonrpc":"2.0",
+				"id":"`+harpoonListRPCID+`",
+				"method":"tools/call",
+				"params":{
+					"name":"list_targets",
+					"arguments":{}
+				}
+			}`),
+			http.Header{
+				"Accept":       []string{"application/json"},
+				"Content-Type": []string{"application/json"},
+			},
+		),
+		ExpectedResponses: []mocktunnelservice.ExpectedResponse{{
+			RequestID: harpoonListID,
+			Assert: func(tb testing.TB, resp mocktunnelservice.ReceivedResponse) {
+				if tb != nil {
+					tb.Helper()
+				}
+				target := tb
+				if target == nil {
+					target = t
+				}
+				if resp.ResponseType != string(wiretypes.ResponsePayloadJSONRPC) {
+					target.Fatalf("harpoon list_targets response type mismatch: got %q", resp.ResponseType)
+				}
+				if resp.ResponseCode != http.StatusOK {
+					target.Fatalf("harpoon list_targets response code mismatch: %d", resp.ResponseCode)
+				}
+
+				var payload struct {
+					Result struct {
+						StructuredContent struct {
+							Targets []struct {
+								Label string `json:"label"`
+							} `json:"targets"`
+						} `json:"structuredContent"`
+					} `json:"result"`
+					Error json.RawMessage `json:"error"`
+				}
+				if err := json.Unmarshal(resp.JSONResponse, &payload); err != nil {
+					target.Fatalf("decode harpoon list_targets response: %v", err)
+				}
+				if len(payload.Error) != 0 {
+					target.Fatalf("harpoon list_targets returned JSON-RPC error: %s", payload.Error)
+				}
+				foundAuthMetadataTarget := false
+				for _, entry := range payload.Result.StructuredContent.Targets {
+					if entry.Label == "oauth-auth-server-metadata-0" {
+						foundAuthMetadataTarget = true
+						break
+					}
+				}
+				if !foundAuthMetadataTarget {
+					target.Fatalf("harpoon list_targets missing oauth-auth-server-metadata-0")
+				}
+			},
+		}},
+	}
+
 	h := harnesspkg.NewHarness(
 		t,
 		harnesspkg.WithPreserveClientURLs(),
@@ -379,6 +446,7 @@ func TestOAuthDiscoveryRegistersCustomerHostRegistrationEndpointE2E(t *testing.T
 				oauthCommand,
 				harpoonInitialize,
 				harpoonInitialized,
+				harpoonListTargets,
 				harpoonCallAuthMetadata,
 			),
 		),
