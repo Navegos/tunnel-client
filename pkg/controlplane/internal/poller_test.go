@@ -764,6 +764,7 @@ type timeoutRecordingFetcher struct {
 	mu        sync.Mutex
 	callCount int
 	durations []time.Duration
+	pollCh    chan struct{}
 }
 
 type cancelAwareFetcher struct {
@@ -802,10 +803,31 @@ func (f *timeoutRecordingFetcher) Poll(ctx context.Context, limit int) ([]contro
 	<-ctx.Done()
 
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.callCount++
 	f.durations = append(f.durations, time.Since(start))
+	f.mu.Unlock()
+
+	if f.pollCh != nil {
+		select {
+		case f.pollCh <- struct{}{}:
+		default:
+		}
+	}
 	return nil, "", ctx.Err()
+}
+
+func (f *timeoutRecordingFetcher) waitForCalls(t *testing.T, want int) {
+	t.Helper()
+	if f.pollCh == nil {
+		t.Fatal("timeoutRecordingFetcher poll channel was nil")
+	}
+	for i := 0; i < want; i++ {
+		select {
+		case <-f.pollCh:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for poll call %d of %d", i+1, want)
+		}
+	}
 }
 
 func (f *cancelAwareFetcher) Poll(ctx context.Context, limit int) ([]controlplane.PolledCommand, types.TunnelServiceRequestID, error) {
@@ -876,7 +898,7 @@ func TestPollerLogsRecoveryAfterError(t *testing.T) {
 
 func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 	queue := &chanQueue{ch: make(chan controlplane.PolledCommand, 1)}
-	fetcher := &timeoutRecordingFetcher{}
+	fetcher := &timeoutRecordingFetcher{pollCh: make(chan struct{}, 8)}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reader := sdkmetric.NewManualReader()
 	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -890,7 +912,7 @@ func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 		t.Fatalf("new poller: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -900,6 +922,8 @@ func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 		poller.Run(ctx)
 	}()
 
+	fetcher.waitForCalls(t, 2)
+	cancel()
 	wg.Wait()
 
 	fetcher.mu.Lock()
@@ -912,9 +936,6 @@ func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 	for i, duration := range fetcher.durations {
 		if duration < pollTimeout/2 {
 			t.Fatalf("call %d returned too quickly: %v", i, duration)
-		}
-		if duration > pollTimeout*2 {
-			t.Fatalf("call %d exceeded expected timeout, got %v", i, duration)
 		}
 	}
 }

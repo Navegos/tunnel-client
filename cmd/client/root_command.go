@@ -24,6 +24,7 @@ func newRootCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
 
 	rootCmd.AddCommand(newRunCommand(lookupEnv))
+	rootCmd.AddCommand(newProfilesCommand(lookupEnv, stdout, stderr))
 	rootCmd.AddCommand(admincmd.NewAdminCommand(lookupEnv, stdout, stderr))
 
 	return rootCmd

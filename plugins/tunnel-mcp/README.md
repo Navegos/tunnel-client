@@ -31,7 +31,7 @@ Runtime prerequisites:
 Optional:
 
 - `tmux` for tmux-managed background sessions. When `tmux` is unavailable, the
-  plugin starts `tunnel-client run --config <path>` directly as a detached
+  plugin starts `tunnel-client run --profile <name>` directly as a detached
   background process and records its PID and log path in local state.
 
 ## Environment
@@ -52,6 +52,9 @@ Optional:
 - `TUNNEL_MCP_RUNTIME_API_KEY` or `--runtime-api-key env:VARNAME` /
   `--runtime-api-key file:/path/to/key` changes the runtime key reference stored
   in generated native configs. Literal runtime keys are rejected.
+- `TUNNEL_CLIENT_PROFILE_DIR` overrides where generated native tunnel-client
+  profiles are written. When unset, the plugin follows tunnel-client defaults:
+  `$XDG_CONFIG_HOME/tunnel-client`, then `~/.config/tunnel-client`.
 - `CODEX_HOME` controls local plugin state. State is stored under
   `$CODEX_HOME/tunnel-mcp` when set, otherwise under `~/.codex/tunnel-mcp`.
 
@@ -83,6 +86,7 @@ Connect a local HTTP MCP server:
 ```bash
 scripts/tunnel_mcp connect \
   --alias awesome-mcp \
+  --profile sample_mcp_with_dcr \
   --admin-profile sandbox \
   --organization-id org_123 \
   --mcp-server-url http://127.0.0.1:3001/mcp
@@ -124,14 +128,15 @@ and human-inspectable:
 - `admin_profiles.yaml`
 - `processes.yaml`
 - `history.md`
-- `configs/<alias>.yaml`
 - `health/<alias>.url`
 - `logs/<alias>.log` when the fallback detached-process launcher is used
 
-Generated runtime configs use native `tunnel-client run --config <path>` and
+Generated runtime profiles are written to the native tunnel-client profile
+directory as `<profile>.yaml`, use `tunnel-client run --profile <profile>`, and
 include `control_plane`, `mcp`, `health`, `admin_ui`, and `log` sections. They
 do not persist admin keys, bearer tokens, cookies, or literal `sk-` style API
-keys.
+keys. Alias and process records include `profile_name` and `profile_path`;
+`config_path` is kept as a compatibility alias for older local state consumers.
 
 `admin_profiles.yaml` stores admin profile names, control-plane base URLs, and
 admin key references such as `env:OPENAI_ADMIN_KEY` or `file:/path/to/key`. Alias

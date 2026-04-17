@@ -116,6 +116,7 @@ def _connect(
     args: argparse.Namespace, runner: Runner, popen_factory: runtime.PopenFactory
 ) -> dict[str, Any]:
     alias = state.normalize_alias(args.alias)
+    profile_name = runtime.normalize_profile_name(args.profile, alias=alias)
     root = state.ensure_state_dirs()
     target = _target_from_args(args)
     runtime_api_key = _runtime_api_key_ref(args)
@@ -141,15 +142,16 @@ def _connect(
         previous_alias and previous_alias.tunnel_id and previous_alias.tunnel_id != tunnel_id
     )
 
-    config_path = runtime.write_runtime_config(
+    profile_path = runtime.write_runtime_profile(
         alias=alias,
+        profile_name=profile_name,
         tunnel_id=tunnel_id,
         base_url=admin_profile.control_plane_base_url,
         api_key=runtime_api_key,
         target=target,
         state_root=root,
     )
-    health_url_file = runtime.config_health_url_file(config_path)
+    health_url_file = runtime.profile_health_url_file(alias, root)
 
     aliases = state.load_aliases(root)
     aliases[alias] = state.alias_record_from_tunnel(
@@ -157,7 +159,9 @@ def _connect(
         tunnel=tunnel,
         admin_profile=admin_profile.name,
         description=args.description or _default_description(alias),
-        config_path=str(config_path),
+        config_path=str(profile_path),
+        profile_name=profile_name,
+        profile_path=str(profile_path),
         health_url_file=str(health_url_file),
     )
     state.save_aliases(aliases, root)
@@ -175,7 +179,7 @@ def _connect(
     try:
         launch = runtime.start_or_reuse(
             alias=alias,
-            config_path=config_path,
+            profile_name=profile_name,
             tunnel_client_bin=args.tunnel_client_bin,
             state_root=root,
             runner=runner,
@@ -190,7 +194,9 @@ def _connect(
         alias=alias,
         tunnel_id=tunnel["id"],
         admin_profile=admin_profile.name,
-        config_path=str(config_path),
+        config_path=str(profile_path),
+        profile_name=profile_name,
+        profile_path=str(profile_path),
         health_url_file=str(health_url_file),
         target_kind=target.kind,
         target_value=target.value,
@@ -215,7 +221,9 @@ def _connect(
         "tunnel": tunnel,
         "admin_profile": admin_profile.name,
         "admin_profile_path": admin_profile.path,
-        "config_path": str(config_path),
+        "profile_name": profile_name,
+        "profile_path": str(profile_path),
+        "config_path": str(profile_path),
         "health_url_file": str(health_url_file),
         "mode": launch.mode,
         "session_name": launch.session_name,
@@ -298,6 +306,12 @@ def _status(args: argparse.Namespace, runner: Runner) -> dict[str, Any]:
         "error": error,
         "repair_command": repair_command,
         "config_path": process.config_path if process else record.config_path,
+        "profile_name": (
+            process.profile_name if process and process.profile_name else record.profile_name
+        ),
+        "profile_path": (
+            process.profile_path if process and process.profile_path else record.profile_path
+        ),
         "health_url_file": health_url_file,
         "health_url": health_url,
         "tmux": {
@@ -585,6 +599,8 @@ def _repair_command(
     command = ["scripts/tunnel_mcp", "connect", "--alias", alias]
     if record.admin_profile:
         command.extend(["--admin-profile", record.admin_profile])
+    if record.profile_name:
+        command.extend(["--profile", record.profile_name])
     if record.organization_ids:
         command.extend(["--organization-id", record.organization_ids[0]])
     elif record.workspace_ids:
@@ -640,6 +656,7 @@ def _parser() -> argparse.ArgumentParser:
     connect.add_argument("--name")
     connect.add_argument("--description")
     connect.add_argument("--tunnel-id", help="Attach to an existing tunnel id without admin CRUD")
+    connect.add_argument("--profile", help="tunnel-client profile name to write and run")
     target = connect.add_mutually_exclusive_group(required=True)
     target.add_argument("--mcp-server-url")
     target.add_argument("--mcp-command")

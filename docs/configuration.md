@@ -1,7 +1,7 @@
 # Configuration Reference
 
-`tunnel-client` can be configured via CLI flags, environment variables, or a
-YAML config file.
+`tunnel-client` can be configured via CLI flags, environment variables, a YAML
+config file, or a named YAML profile.
 
 - **Precedence**: flags > environment variables > YAML config > defaults.
 - **Requirement**: you must provide a control-plane API key, a tunnel ID, and a
@@ -11,6 +11,30 @@ YAML config file.
 
 Pass a config file with `--config /path/to/tunnel-client.yaml` or set
 `TUNNEL_CLIENT_CONFIG=/path/to/tunnel-client.yaml`.
+
+Named profiles use the same YAML schema. Run a profile with:
+
+```bash
+tunnel-client run --profile sample_mcp_with_dcr
+```
+
+Profile lookup uses this precedence:
+
+1. `--profile-dir /path/to/profiles`
+2. `TUNNEL_CLIENT_PROFILE_DIR=/path/to/profiles`
+3. `$XDG_CONFIG_HOME/tunnel-client`
+4. `~/.config/tunnel-client`
+
+For example, with the default XDG fallback, the command above loads:
+
+```text
+~/.config/tunnel-client/sample_mcp_with_dcr.yaml
+```
+
+`TUNNEL_CLIENT_PROFILE=sample_mcp_with_dcr` is equivalent to passing
+`--profile sample_mcp_with_dcr`. `--config` and `--profile` are mutually
+exclusive, and `TUNNEL_CLIENT_CONFIG` and `TUNNEL_CLIENT_PROFILE` are mutually
+exclusive.
 
 Example:
 
@@ -70,6 +94,11 @@ secrets are redacted before export.
 ## Commands
 
 - `run`: start the tunnel client poll loop.
+- `profiles list`: list profile YAML files in the selected profile directory.
+- `profiles add <name>`: create a profile from `--from-file` or a built-in
+  sample such as `--sample sample_mcp_with_dcr`.
+- `profiles edit <name>`: open a profile in `$VISUAL` or `$EDITOR`, validate it,
+  and only save it when the edited YAML parses.
 - `admin tunnels`: manage tunnel metadata via the admin API (`/v1/tunnels*`).
   Requires an admin key and org/workspace scope flags.
 - `tunnel-client` with no subcommand prints help and available commands.

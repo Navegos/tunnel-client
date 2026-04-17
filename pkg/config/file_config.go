@@ -13,9 +13,12 @@ import (
 )
 
 type fileConfigValues struct {
-	Path string
-	Raw  []byte
-	Env  map[string]string
+	Path        string
+	ProfileName string
+	ProfilePath string
+	ProfileDir  string
+	Raw         []byte
+	Env         map[string]string
 }
 
 type fileConfig struct {
@@ -112,52 +115,49 @@ type fileProxyConfig struct {
 }
 
 func loadFileConfigValues(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (*fileConfigValues, error) {
-	path, err := configFilePath(fs, lookupEnv)
+	source, err := ResolveConfigSource(fs, lookupEnv)
 	if err != nil {
 		return nil, err
 	}
-	if path == "" {
+	if source.Path == "" {
 		return nil, nil
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(source.Path)
 	if err != nil {
-		return nil, fmt.Errorf("read config file %s: %w", path, err)
+		return nil, fmt.Errorf("read config file %s: %w", source.Path, err)
 	}
 
-	var cfg fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("parse config file %s: %w", path, err)
-	}
-	if cfg.ConfigVersion != nil && *cfg.ConfigVersion != 1 {
-		return nil, fmt.Errorf("parse config file %s: unsupported config_version %d", path, *cfg.ConfigVersion)
+	cfg, err := parseFileConfig(source.Path, data)
+	if err != nil {
+		return nil, err
 	}
 
 	env, err := cfg.toEnv(lookupEnv)
 	if err != nil {
-		return nil, fmt.Errorf("parse config file %s: %w", path, err)
+		return nil, fmt.Errorf("parse config file %s: %w", source.Path, err)
 	}
-	return &fileConfigValues{Path: path, Raw: bytes.Clone(data), Env: env}, nil
+	return &fileConfigValues{
+		Path:        source.Path,
+		ProfileName: source.ProfileName,
+		ProfilePath: source.ProfilePath,
+		ProfileDir:  source.ProfileDir,
+		Raw:         bytes.Clone(data),
+		Env:         env,
+	}, nil
 }
 
-func configFilePath(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (string, error) {
-	if fs != nil {
-		if flag := fs.Lookup("config"); flag != nil && flag.Changed {
-			path := strings.TrimSpace(flag.Value.String())
-			if path == "" {
-				return "", fmt.Errorf("config file path is required when --config is set")
-			}
-			return path, nil
-		}
+func parseFileConfig(path string, data []byte) (fileConfig, error) {
+	var cfg fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		return fileConfig{}, fmt.Errorf("parse config file %s: %w", path, err)
 	}
-	if lookupEnv != nil {
-		if path, ok := lookupEnv("TUNNEL_CLIENT_CONFIG"); ok {
-			return strings.TrimSpace(path), nil
-		}
+	if cfg.ConfigVersion != nil && *cfg.ConfigVersion != 1 {
+		return fileConfig{}, fmt.Errorf("parse config file %s: unsupported config_version %d", path, *cfg.ConfigVersion)
 	}
-	return "", nil
+	return cfg, nil
 }
 
 func lookupEnvWithFileValues(lookupEnv func(string) (string, bool), values *fileConfigValues) func(string) (string, bool) {

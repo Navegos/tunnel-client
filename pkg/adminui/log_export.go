@@ -480,7 +480,10 @@ func buildEffectiveConfigSnapshot(cfg *config.Config) map[string]any {
 
 	out := map[string]any{
 		"source": map[string]any{
-			"config_file": redactString(cfg.Runtime.ConfigFile),
+			"config_file":  redactString(cfg.Runtime.ConfigFile),
+			"profile":      redactString(cfg.Runtime.ProfileName),
+			"profile_path": redactString(cfg.Runtime.ProfilePath),
+			"profile_dir":  redactString(cfg.Runtime.ProfileDir),
 		},
 		"control_plane": map[string]any{
 			"base_url":              urlForSnapshot(cfg.ControlPlane.BaseURL),

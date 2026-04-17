@@ -101,6 +101,7 @@ class TunnelMCPTest(unittest.TestCase):
         self._env = os.environ.copy()
         self.temp = tempfile.TemporaryDirectory()
         os.environ["CODEX_HOME"] = self.temp.name
+        os.environ["XDG_CONFIG_HOME"] = str(pathlib.Path(self.temp.name) / "xdg")
 
     def tearDown(self) -> None:
         os.environ.clear()
@@ -137,7 +138,7 @@ class TunnelMCPTest(unittest.TestCase):
         self.assertIn("create", result.stdout)
         self.assertIn("connect", result.stdout)
 
-    def test_connect_writes_native_config_and_starts_tmux_with_config_flag(self) -> None:
+    def test_connect_writes_native_profile_and_starts_tmux_with_profile_flag(self) -> None:
         fake = FakeRunner()
         code, stdout, stderr = _run_main(
             [
@@ -154,8 +155,13 @@ class TunnelMCPTest(unittest.TestCase):
 
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
-        config_path = pathlib.Path(payload["config_path"])
-        config = json.loads(config_path.read_text(encoding="utf-8"))
+        profile_path = pathlib.Path(payload["profile_path"])
+        self.assertEqual(payload["profile_name"], "awesome-mcp")
+        self.assertEqual(
+            profile_path,
+            pathlib.Path(self.temp.name) / "xdg" / "tunnel-client" / "awesome-mcp.yaml",
+        )
+        config = json.loads(profile_path.read_text(encoding="utf-8"))
         self.assertEqual(config["control_plane"]["api_key"], "env:CONTROL_PLANE_API_KEY")
         self.assertEqual(config["control_plane"]["tunnel_id"], payload["tunnel"]["id"])
         self.assertEqual(config["health"]["listen_addr"], "127.0.0.1:0")
@@ -164,8 +170,7 @@ class TunnelMCPTest(unittest.TestCase):
         tmux_calls = [call for call in fake.calls if call[:2] == ["tmux", "new-session"]]
         self.assertEqual(len(tmux_calls), 1)
         self.assertEqual(tmux_calls[0][4], "tunnel-mcp__awesome-mcp")
-        self.assertIn("tunnel-client run --config", tmux_calls[0][5])
-        self.assertIn(str(config_path), tmux_calls[0][5])
+        self.assertEqual(tmux_calls[0][5], "tunnel-client run --profile awesome-mcp")
 
     def test_connect_existing_tunnel_id_uses_runtime_key_without_admin_crud(self) -> None:
         fake = FakeRunner()
@@ -187,10 +192,34 @@ class TunnelMCPTest(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
         self.assertEqual(payload["tunnel"]["id"], "tunnel_0123456789abcdef0123456789abcdef")
-        config = json.loads(pathlib.Path(payload["config_path"]).read_text(encoding="utf-8"))
+        config = json.loads(pathlib.Path(payload["profile_path"]).read_text(encoding="utf-8"))
         self.assertEqual(config["control_plane"]["tunnel_id"], payload["tunnel"]["id"])
         self.assertEqual(config["control_plane"]["api_key"], "env:TUNNEL_RUNTIME_KEY")
         self.assertEqual(_admin_calls(fake), [])
+
+    def test_connect_allows_explicit_profile_name(self) -> None:
+        fake = FakeRunner()
+        code, stdout, stderr = _run_main(
+            [
+                "connect",
+                "--alias",
+                "Sample MCP",
+                "--profile",
+                "sample_mcp_with_dcr",
+                "--tunnel-id",
+                "tunnel_0123456789abcdef0123456789abcdef",
+                "--mcp-server-url",
+                "https://mcp.example/mcp",
+            ],
+            fake,
+        )
+
+        self.assertEqual(code, 0, stderr)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["profile_name"], "sample_mcp_with_dcr")
+        self.assertTrue(payload["profile_path"].endswith("sample_mcp_with_dcr.yaml"))
+        tmux_calls = [call for call in fake.calls if call[:2] == ["tmux", "new-session"]]
+        self.assertEqual(tmux_calls[0][5], "tunnel-client run --profile sample_mcp_with_dcr")
 
     def test_connect_rejects_literal_runtime_api_key(self) -> None:
         fake = FakeRunner()
@@ -237,7 +266,8 @@ class TunnelMCPTest(unittest.TestCase):
         self.assertEqual(payload["pid"], 43210)
         self.assertTrue(payload["log_path"].endswith("no-tmux-mcp.log"))
         self.assertEqual(fake_popen.calls[0][0], "tunnel-client")
-        self.assertEqual(fake_popen.calls[0][1:3], ["run", "--config"])
+        self.assertEqual(fake_popen.calls[0][1:3], ["run", "--profile"])
+        self.assertEqual(fake_popen.calls[0][3], "no-tmux-mcp")
         process = state.load_processes()["no-tmux-mcp"]
         self.assertEqual(process.mode, "process")
         self.assertEqual(process.pid, 43210)
@@ -298,7 +328,7 @@ class TunnelMCPTest(unittest.TestCase):
 
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
-        config = json.loads(pathlib.Path(payload["config_path"]).read_text(encoding="utf-8"))
+        config = json.loads(pathlib.Path(payload["profile_path"]).read_text(encoding="utf-8"))
         self.assertEqual(
             config["mcp"]["commands"][0]["command"],
             "python server.py --api-key env:SERVER_API_KEY",
@@ -435,7 +465,7 @@ class TunnelMCPTest(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
         self.assertNotEqual(payload["tunnel"]["id"], "tunnel_deadbeefdeadbeefdeadbeefdeadbeef")
-        config = json.loads(pathlib.Path(payload["config_path"]).read_text(encoding="utf-8"))
+        config = json.loads(pathlib.Path(payload["profile_path"]).read_text(encoding="utf-8"))
         self.assertEqual(config["mcp"]["commands"][0]["command"], "python server.py")
 
     def test_connect_restarts_running_tmux_when_stale_alias_is_replaced(self) -> None:

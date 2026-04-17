@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -128,6 +129,7 @@ type MockMCPServer struct {
 	mu       sync.Mutex
 	calls    []*Call
 	received []IncomingRequest
+	requests chan struct{}
 
 	server     *mcp.Server
 	httpServer *httptest.Server
@@ -158,7 +160,9 @@ var stdioLock sync.Mutex
 
 // NewMockMCPServer constructs an empty mock server configured by optional options.
 func NewMockMCPServer(opts ...Option) *MockMCPServer {
-	mock := &MockMCPServer{}
+	mock := &MockMCPServer{
+		requests: make(chan struct{}, 1),
+	}
 	for _, opt := range opts {
 		opt(mock)
 	}
@@ -308,7 +312,7 @@ func (m *MockMCPServer) Close() {
 		if done != nil {
 			select {
 			case err := <-done:
-				if err != nil && !errors.Is(err, context.Canceled) {
+				if err != nil && !isExpectedTransportShutdownError(err) {
 					m.failf("mock MCP server transport stopped with error: %v", err)
 				}
 			case <-time.After(time.Second):
@@ -405,8 +409,6 @@ func (m *MockMCPServer) WaitForRequests(ctx context.Context, n int) error {
 	if n <= 0 {
 		return nil
 	}
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
 	for {
 		m.mu.Lock()
 		count := len(m.received)
@@ -417,7 +419,7 @@ func (m *MockMCPServer) WaitForRequests(ctx context.Context, n int) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-m.requests:
 		}
 	}
 }
@@ -460,6 +462,7 @@ func (m *MockMCPServer) uniqueToolsLocked() []string {
 	for name := range seen {
 		tools = append(tools, name)
 	}
+	sort.Strings(tools)
 	return tools
 }
 
@@ -567,7 +570,6 @@ func buildResult(call *Call) (*mcp.CallToolResult, map[string]any, error) {
 
 func (m *MockMCPServer) recordRequest(req *mcp.CallToolRequest, call *Call) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	args := cloneJSON(req.Params.Arguments)
 	var headers http.Header
 	if req.Extra != nil {
@@ -578,6 +580,11 @@ func (m *MockMCPServer) recordRequest(req *mcp.CallToolRequest, call *Call) {
 		Arguments: args,
 		Headers:   headers,
 	})
+	m.mu.Unlock()
+	select {
+	case m.requests <- struct{}{}:
+	default:
+	}
 }
 
 func (m *MockMCPServer) popCall(tool string) *Call {
@@ -726,6 +733,22 @@ func (m *MockMCPServer) failf(format string, args ...any) {
 		return
 	}
 	panic(fmt.Sprintf(format, args...))
+}
+
+func isExpectedTransportShutdownError(err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "server is closing") ||
+		strings.Contains(lower, "closed pipe") ||
+		strings.Contains(lower, "use of closed network connection")
 }
 
 func (m *MockMCPServer) serveProtectedResourceMetadata(w http.ResponseWriter, req *http.Request) {

@@ -43,6 +43,8 @@ class AliasRecord:
     workspace_ids: tuple[str, ...] = ()
     tenant_ids: tuple[str, ...] = ()
     config_path: str = ""
+    profile_name: str = ""
+    profile_path: str = ""
     health_url_file: str = ""
     updated_at: str = ""
 
@@ -58,6 +60,8 @@ class AliasRecord:
             workspace_ids=tuple(str(v) for v in raw.get("workspace_ids", [])),
             tenant_ids=tuple(str(v) for v in raw.get("tenant_ids", [])),
             config_path=str(raw.get("config_path", "")),
+            profile_name=str(raw.get("profile_name", "")),
+            profile_path=str(raw.get("profile_path", "")),
             health_url_file=str(raw.get("health_url_file", "")),
             updated_at=str(raw.get("updated_at", "")),
         )
@@ -73,6 +77,8 @@ class AliasRecord:
             "workspace_ids": list(self.workspace_ids),
             "tenant_ids": list(self.tenant_ids),
             "config_path": self.config_path,
+            "profile_name": self.profile_name,
+            "profile_path": self.profile_path,
             "health_url_file": self.health_url_file,
             "updated_at": self.updated_at,
         }
@@ -89,6 +95,8 @@ class ProcessRecord:
     command: str
     started_at: str
     admin_profile: str = ""
+    profile_name: str = ""
+    profile_path: str = ""
     mode: str = "tmux"
     session_name: str = ""
     pid: int = 0
@@ -104,6 +112,8 @@ class ProcessRecord:
             session_name=str(raw.get("session_name", "")),
             pid=int(raw.get("pid", 0) or 0),
             config_path=str(raw.get("config_path", "")),
+            profile_name=str(raw.get("profile_name", "")),
+            profile_path=str(raw.get("profile_path", "")),
             health_url_file=str(raw.get("health_url_file", "")),
             target_kind=str(raw.get("target_kind", "")),
             target_value=str(raw.get("target_value", "")),
@@ -121,6 +131,8 @@ class ProcessRecord:
             "session_name": self.session_name,
             "pid": self.pid,
             "config_path": self.config_path,
+            "profile_name": self.profile_name,
+            "profile_path": self.profile_path,
             "health_url_file": self.health_url_file,
             "target_kind": self.target_kind,
             "target_value": self.target_value,
@@ -292,6 +304,8 @@ def alias_record_from_tunnel(
     admin_profile: str = "",
     description: str = "",
     config_path: str = "",
+    profile_name: str = "",
+    profile_path: str = "",
     health_url_file: str = "",
 ) -> AliasRecord:
     return AliasRecord(
@@ -304,6 +318,8 @@ def alias_record_from_tunnel(
         workspace_ids=tuple(str(v) for v in tunnel.get("workspace_ids", [])),
         tenant_ids=tuple(str(v) for v in tunnel.get("tenant_ids", [])),
         config_path=config_path,
+        profile_name=profile_name,
+        profile_path=profile_path,
         health_url_file=health_url_file,
         updated_at=utc_now(),
     )

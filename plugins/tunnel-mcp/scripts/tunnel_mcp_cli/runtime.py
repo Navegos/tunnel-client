@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -12,6 +13,7 @@ from typing import Callable, Protocol
 from tunnel_mcp_cli import state
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+_PROFILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class PopenFactory(Protocol):
@@ -35,8 +37,30 @@ class LaunchResult:
     log_path: str = ""
 
 
-def write_runtime_config(
+def default_profile_dir() -> Path:
+    override = os.environ.get("TUNNEL_CLIENT_PROFILE_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    if xdg_config_home:
+        return Path(xdg_config_home).expanduser() / "tunnel-client"
+    return Path.home() / ".config" / "tunnel-client"
+
+
+def normalize_profile_name(profile_name: str, *, alias: str) -> str:
+    name = (profile_name or state.normalize_alias(alias)).strip()
+    if not name:
+        raise state.StateError("profile name must not be empty")
+    if name in {".", ".."} or "/" in name or "\\" in name:
+        raise state.StateError("profile name must not contain path separators")
+    if not _PROFILE_NAME_PATTERN.match(name):
+        raise state.StateError("profile name must use letters, numbers, '.', '_' or '-'")
+    return name
+
+
+def write_runtime_profile(
     alias: str,
+    profile_name: str,
     tunnel_id: str,
     base_url: str,
     api_key: str,
@@ -44,9 +68,10 @@ def write_runtime_config(
     state_root: Path,
 ) -> Path:
     normalized_alias = state.normalize_alias(alias)
+    normalized_profile = normalize_profile_name(profile_name, alias=normalized_alias)
     state.reject_inline_secret_material(target.value, field=f"mcp {target.kind}")
     root = state.ensure_state_dirs(state_root)
-    config_path = root / "configs" / f"{normalized_alias}.yaml"
+    config_path = default_profile_dir() / f"{normalized_profile}.yaml"
     health_url_file = root / "health" / f"{normalized_alias}.url"
 
     config: dict[str, object] = {
@@ -69,32 +94,33 @@ def write_runtime_config(
         },
         "mcp": _mcp_config(target),
     }
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     config_path.chmod(0o600)
     return config_path
 
 
-def config_health_url_file(config_path: Path) -> Path:
-    return config_path.parent.parent / "health" / f"{config_path.stem}.url"
+def profile_health_url_file(alias: str, state_root: Path) -> Path:
+    return state.ensure_state_dirs(state_root) / "health" / f"{state.normalize_alias(alias)}.url"
 
 
 def tmux_session_name(alias: str) -> str:
     return f"tunnel-mcp__{state.normalize_alias(alias)}"
 
 
-def tunnel_client_args(tunnel_client_bin: str, config_path: Path) -> list[str]:
-    return [tunnel_client_bin, "run", "--config", str(config_path)]
+def tunnel_client_args(tunnel_client_bin: str, profile_name: str) -> list[str]:
+    return [tunnel_client_bin, "run", "--profile", profile_name]
 
 
-def tunnel_client_command(tunnel_client_bin: str, config_path: Path) -> str:
+def tunnel_client_command(tunnel_client_bin: str, profile_name: str) -> str:
     return " ".join(
-        shlex.quote(part) for part in tunnel_client_args(tunnel_client_bin, config_path)
+        shlex.quote(part) for part in tunnel_client_args(tunnel_client_bin, profile_name)
     )
 
 
 def start_or_reuse(
     alias: str,
-    config_path: Path,
+    profile_name: str,
     tunnel_client_bin: str,
     state_root: Path,
     runner: Runner,
@@ -102,7 +128,8 @@ def start_or_reuse(
     existing_pid: int = 0,
     replace_existing: bool = False,
 ) -> LaunchResult:
-    command = tunnel_client_command(tunnel_client_bin, config_path)
+    profile_name = normalize_profile_name(profile_name, alias=alias)
+    command = tunnel_client_command(tunnel_client_bin, profile_name)
     session = tmux_session_name(alias)
     if tmux_available(runner):
         if tmux_has_session(alias, runner):
@@ -124,7 +151,7 @@ def start_or_reuse(
                     already_running=True,
                     session_name=session,
                 )
-        result = start_tmux(alias, config_path, tunnel_client_bin, runner)
+        result = start_tmux(alias, profile_name, tunnel_client_bin, runner)
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
             stdout = (result.stdout or "").strip()
@@ -153,7 +180,7 @@ def start_or_reuse(
             )
 
     process = start_background_process(
-        alias, config_path, tunnel_client_bin, state_root, popen_factory
+        alias, profile_name, tunnel_client_bin, state_root, popen_factory
     )
     return LaunchResult(
         mode="process",
@@ -188,10 +215,10 @@ def tmux_has_session(alias: str, runner: Runner) -> bool:
 
 
 def start_tmux(
-    alias: str, config_path: Path, tunnel_client_bin: str, runner: Runner
+    alias: str, profile_name: str, tunnel_client_bin: str, runner: Runner
 ) -> subprocess.CompletedProcess[str]:
     session = tmux_session_name(alias)
-    command = tunnel_client_command(tunnel_client_bin, config_path)
+    command = tunnel_client_command(tunnel_client_bin, profile_name)
     return runner(
         ["tmux", "new-session", "-d", "-s", session, command],
         check=False,
@@ -216,7 +243,7 @@ def log_path(alias: str, state_root: Path) -> Path:
 
 def start_background_process(
     alias: str,
-    config_path: Path,
+    profile_name: str,
     tunnel_client_bin: str,
     state_root: Path,
     popen_factory: PopenFactory,
@@ -226,7 +253,7 @@ def start_background_process(
     log_file = output_path.open("ab")
     try:
         return popen_factory(
-            tunnel_client_args(tunnel_client_bin, config_path),
+            tunnel_client_args(tunnel_client_bin, profile_name),
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,

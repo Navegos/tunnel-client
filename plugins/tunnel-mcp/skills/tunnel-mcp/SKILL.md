@@ -12,12 +12,12 @@ tunnels through `tunnel-client`.
 
 - Use `tunnel-client admin tunnels` for remote tunnel CRUD. Do not call raw
   tunnel-service HTTP endpoints from this plugin.
-- Use native `tunnel-client run --config <path>` for runtime processes. Do not
-  use a helper shim that translates config files into flags.
+- Use native `tunnel-client run --profile <name>` for runtime processes. Do not
+  use a helper shim that translates profile files into flags.
 - Do not assume a specific source checkout, build system, internal helper, or
   tmux is available. The plugin must work from an installed plugin directory
   with only `python3` and `tunnel-client`.
-- Use tmux when available; otherwise start `tunnel-client run --config <path>`
+- Use tmux when available; otherwise start `tunnel-client run --profile <name>`
   as a detached background process and report the PID/log path.
 - Store alias and process state under `$CODEX_HOME/tunnel-mcp` when
   `CODEX_HOME` is set, otherwise under `~/.codex/tunnel-mcp`.
@@ -27,6 +27,10 @@ tunnels through `tunnel-client`.
   pass literal admin keys.
 - Preserve the link between tunnels and admin CRUD credentials by keeping
   `admin_profile` on alias and process records.
+- Write generated runtime YAML to the native tunnel-client profile directory:
+  `TUNNEL_CLIENT_PROFILE_DIR` when set, otherwise `$XDG_CONFIG_HOME/tunnel-client`,
+  otherwise `~/.config/tunnel-client`. Keep `profile_name` and `profile_path` on
+  alias and process records.
 - Use `--runtime-api-key env:NAME` or `--runtime-api-key file:/path` when a
   runtime tunnel key should differ from the default `env:CONTROL_PLANE_API_KEY`.
   Use `connect --tunnel-id <id>` to attach to a known existing tunnel without
@@ -51,6 +55,7 @@ scripts/tunnel_mcp create \
 ```bash
 scripts/tunnel_mcp connect \
   --alias docs-mcp \
+  --profile sample_mcp_with_dcr \
   --admin-profile default \
   --organization-id org_123 \
   --mcp-server-url http://127.0.0.1:3001/mcp
