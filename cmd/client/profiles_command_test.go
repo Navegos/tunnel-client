@@ -122,11 +122,11 @@ mcp:
 	require.NoError(t, os.WriteFile(path, original, 0o600))
 
 	editor := filepath.Join(temp, "editor.sh")
-	require.NoError(t, os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'config_version: 2\\n' > \"$1\"\n"), 0o700))
+	require.NoError(t, os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'config_version: 2\\n' > \"$1\"\n"), 0o600))
 
 	_, _, err := executeProfilesCommand(t, map[string]string{
 		"HOME":   t.TempDir(),
-		"EDITOR": editor,
+		"EDITOR": "sh " + editor,
 	}, "profiles", "--profile-dir", profileDir, "edit", "sample")
 
 	require.Error(t, err)
@@ -142,11 +142,11 @@ func TestProfilesEditCreatesMissingProfileFromSkeleton(t *testing.T) {
 	temp := t.TempDir()
 	profileDir := filepath.Join(temp, "profiles")
 	editor := filepath.Join(temp, "editor.sh")
-	require.NoError(t, os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'config_version: 1\\ncontrol_plane:\\n  tunnel_id: tunnel_0123456789abcdef0123456789abcdef\\n  api_key: env:CONTROL_PLANE_API_KEY\\nmcp:\\n  server_urls:\\n    - channel: main\\n      url: https://mcp.example/mcp\\n' > \"$1\"\n"), 0o700))
+	require.NoError(t, os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'config_version: 1\\ncontrol_plane:\\n  tunnel_id: tunnel_0123456789abcdef0123456789abcdef\\n  api_key: env:CONTROL_PLANE_API_KEY\\nmcp:\\n  server_urls:\\n    - channel: main\\n      url: https://mcp.example/mcp\\n' > \"$1\"\n"), 0o600))
 
 	stdout, stderr, err := executeProfilesCommand(t, map[string]string{
 		"HOME":   t.TempDir(),
-		"EDITOR": editor,
+		"EDITOR": "sh " + editor,
 	}, "profiles", "--profile-dir", profileDir, "edit", "new_profile")
 
 	require.NoError(t, err, stderr)
