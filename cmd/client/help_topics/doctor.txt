@@ -1,0 +1,23 @@
+tunnel-client doctor checks your selected config before the long-lived daemon starts.
+
+Recommended flow:
+  tunnel-client doctor --profile <name>
+  tunnel-client doctor --profile <name> --explain
+  tunnel-client doctor --profile <name> --json
+
+Use doctor to confirm:
+  - what product surface you are about to start: the tunnel daemon plus /healthz, /readyz, and /ui
+  - which config source was selected
+  - whether the profile/config file loads
+  - whether the tunnel id is valid
+  - whether the control-plane API key reference resolves
+  - whether the main MCP target is configured
+  - whether the exact MCP + OAuth/PRMD contract needed for ready is present:
+    - GET /.well-known/oauth-protected-resource/mcp
+    - GET /.well-known/oauth-authorization-server (from authorization_servers[0])
+  - where the health endpoint and UI will be exposed
+
+Auth model to keep straight:
+  - tunnel-client runtime uses CONTROL_PLANE_API_KEY / OPENAI_API_KEY
+  - tunnel-client admin tunnels get <id> can use that runtime key
+  - admin tunnels list/create/update/delete require OPENAI_ADMIN_KEY / --admin-key

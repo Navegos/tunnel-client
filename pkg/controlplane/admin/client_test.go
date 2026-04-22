@@ -133,6 +133,33 @@ func TestAdminTunnelClientErrorIncludesRequestID(t *testing.T) {
 	}
 }
 
+func TestAdminTunnelClientDeleteUnsupportedHostExplainsProblem(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"Invalid URL (DELETE /v1/tunnels/tunnel_123)"}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	cfg := &config.AdminConfig{
+		BaseURL:  mustParseURL(t, server.URL),
+		AdminKey: "key",
+	}
+	client, err := NewAdminTunnelClient(cfg)
+	if err != nil {
+		t.Fatalf("NewAdminTunnelClient: %v", err)
+	}
+
+	_, err = client.DeleteTunnel(context.Background(), "tunnel_123")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if got := err.Error(); !containsAll(got, "delete is not exposed on this control-plane base URL yet", "DELETE /v1/tunnels/tunnel_123") {
+		t.Fatalf("unexpected delete error: %s", got)
+	}
+}
+
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if !strings.Contains(s, sub) {

@@ -29,7 +29,7 @@ func TestProfilesAddSampleAndList(t *testing.T) {
 	path := filepath.Join(profileDir, "sample_mcp_with_dcr.yaml")
 	contents, err := os.ReadFile(path)
 	require.NoError(t, err)
-	require.Contains(t, string(contents), "api_key: env:CONTROL_PLANE_API_KEY")
+	require.Contains(t, string(contents), `api_key: "env:CONTROL_PLANE_API_KEY"`)
 	require.Contains(t, string(contents), `url: "https://mcp.example/mcp"`)
 
 	stdout, stderr, err = executeProfilesCommand(t, map[string]string{

@@ -74,6 +74,22 @@ var (
 	}
 )
 
+type flagAlias struct {
+	Canonical string
+	Alias     string
+	Kind      string
+}
+
+var commonFlagAliases = []flagAlias{
+	{Canonical: "control-plane.base-url", Alias: "control-plane-base-url", Kind: "string"},
+	{Canonical: "control-plane.tunnel-id", Alias: "control-plane-tunnel-id", Kind: "string"},
+	{Canonical: "control-plane.api-key", Alias: "control-plane-api-key", Kind: "string"},
+	{Canonical: "mcp.server-url", Alias: "mcp-server-url", Kind: "stringArray"},
+	{Canonical: "mcp.command", Alias: "mcp-command", Kind: "stringArray"},
+	{Canonical: "health.listen-addr", Alias: "health-listen-addr", Kind: "string"},
+	{Canonical: "health.url-file", Alias: "health-url-file", Kind: "string"},
+}
+
 // Config captures the runtime values required to start the tunnel client.
 type Config struct {
 	ControlPlane ControlPlaneConfig
@@ -275,6 +291,13 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output())
 	_, _ = fmt.Fprintf(fs.Output(), "Usage of %s:\n", name)
 	fs.PrintDefaults()
+	_, _ = fmt.Fprintln(fs.Output(), "\nAgent-first next steps:")
+	_, _ = fmt.Fprintln(fs.Output(), "  tunnel-client help quickstart")
+	_, _ = fmt.Fprintln(fs.Output(), "  tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id tunnel_...")
+	_, _ = fmt.Fprintln(fs.Output(), "  tunnel-client init --profile sample_mcp_with_dcr --tunnel-id tunnel_... --mcp-server-url http://127.0.0.1:3001/mcp")
+	_, _ = fmt.Fprintln(fs.Output(), "  tunnel-client doctor --profile sample_mcp_with_dcr")
+	_, _ = fmt.Fprintln(fs.Output(), "  tunnel-client profiles samples list")
+	_, _ = fmt.Fprintln(fs.Output(), "  UI convention: http://<health.listen-addr>/ui")
 	_, _ = fmt.Fprintln(fs.Output(), "\nEnvironment variables:")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_API_KEY\tAPI key used to authenticate to the tunnel control plane (required; preferred)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
@@ -338,6 +361,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	if f := fs.Lookup("log.file"); f != nil {
 		f.DefValue = "stdout"
 	}
+	registerFlagAliases(fs)
 }
 
 // LoadFromFlagSet builds a Config using the parsed values from the provided flag set.
@@ -348,6 +372,7 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 	if lookupEnv == nil {
 		lookupEnv = os.LookupEnv
 	}
+	applyFlagAliases(fs)
 
 	fileValues, err := loadFileConfigValues(fs, lookupEnv)
 	if err != nil {
@@ -418,6 +443,21 @@ func LoadFromFlagSet(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (
 	}
 
 	return cfg, nil
+}
+
+// ValidateTunnelID verifies that the tunnel id matches the runtime contract.
+func ValidateTunnelID(tunnelID string) error {
+	tunnelID = strings.TrimSpace(tunnelID)
+	if tunnelID == "" {
+		return errors.New("tunnel ID is required; set --control-plane.tunnel-id or CONTROL_PLANE_TUNNEL_ID")
+	}
+	if escaped := url.PathEscape(tunnelID); escaped != tunnelID {
+		return fmt.Errorf("invalid tunnel ID %q: must be safe for use as a URL path parameter", tunnelID)
+	}
+	if !tunnelIDPattern.MatchString(tunnelID) {
+		return fmt.Errorf("invalid tunnel ID %q: must match tunnel_<32 lowercase letters or digits>", tunnelID)
+	}
+	return nil
 }
 
 func getValue(fs *pflag.FlagSet, name string) string {
@@ -665,17 +705,8 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 		}
 	}
 
-	if tunnelID == "" {
-		return ControlPlaneConfig{}, errors.New("tunnel ID is required; set --control-plane.tunnel-id or CONTROL_PLANE_TUNNEL_ID")
-	}
-	if escaped := url.PathEscape(tunnelID); escaped != tunnelID {
-		return ControlPlaneConfig{}, fmt.Errorf(
-			"invalid tunnel ID %q: must be safe for use as a URL path parameter",
-			tunnelID,
-		)
-	}
-	if !tunnelIDPattern.MatchString(tunnelID) {
-		return ControlPlaneConfig{}, fmt.Errorf("invalid tunnel ID %q: must match tunnel_<32 lowercase letters or digits>", tunnelID)
+	if err := ValidateTunnelID(tunnelID); err != nil {
+		return ControlPlaneConfig{}, err
 	}
 
 	maxInFlight := defaultControlPlaneMaxInFlight
@@ -837,6 +868,53 @@ func parseHeader(raw string) (string, string, error) {
 	}
 
 	return key, value, nil
+}
+
+func registerFlagAliases(fs *pflag.FlagSet) {
+	if fs == nil {
+		return
+	}
+	for _, alias := range commonFlagAliases {
+		switch alias.Kind {
+		case "string":
+			fs.String(alias.Alias, "", fmt.Sprintf("Alias of --%s", alias.Canonical))
+		case "stringArray":
+			fs.StringArray(alias.Alias, nil, fmt.Sprintf("Alias of --%s", alias.Canonical))
+		default:
+			continue
+		}
+		_ = fs.MarkHidden(alias.Alias)
+	}
+}
+
+func applyFlagAliases(fs *pflag.FlagSet) {
+	if fs == nil {
+		return
+	}
+	for _, alias := range commonFlagAliases {
+		canonicalFlag := fs.Lookup(alias.Canonical)
+		aliasFlag := fs.Lookup(alias.Alias)
+		if canonicalFlag == nil || aliasFlag == nil || canonicalFlag.Changed || !aliasFlag.Changed {
+			continue
+		}
+		switch alias.Kind {
+		case "string":
+			if err := canonicalFlag.Value.Set(aliasFlag.Value.String()); err == nil {
+				canonicalFlag.Changed = true
+			}
+		case "stringArray":
+			values, err := fs.GetStringArray(alias.Alias)
+			if err != nil {
+				continue
+			}
+			for _, value := range values {
+				if err := canonicalFlag.Value.Set(value); err != nil {
+					break
+				}
+			}
+			canonicalFlag.Changed = true
+		}
+	}
 }
 
 func buildLoggingConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (LoggingConfig, error) {
@@ -1197,6 +1275,10 @@ func parseMCPBindingEntry(entry string, kind MCPTransportKind, lookupEnv func(st
 		return buildMCPBinding(channel, kind, entry)
 	}
 
+	if kind == MCPTransportStdio {
+		return parseQualifiedStdioMCPBindingEntry(entry)
+	}
+
 	parts := strings.Split(entry, ",")
 	values := make(map[string]string, len(parts))
 	for _, part := range parts {
@@ -1292,6 +1374,59 @@ func parseMCPBindingEntry(entry string, kind MCPTransportKind, lookupEnv func(st
 	default:
 		return MCPChannelBinding{}, fmt.Errorf("mcp config: unsupported transport %q", kind)
 	}
+}
+
+func parseQualifiedStdioMCPBindingEntry(entry string) (MCPChannelBinding, error) {
+	trimmed := strings.TrimSpace(entry)
+	channelName := ""
+	rawCommand := ""
+
+	switch {
+	case strings.HasPrefix(trimmed, "channel="):
+		comma := strings.Index(trimmed, ",")
+		if comma < 0 {
+			return MCPChannelBinding{}, fmt.Errorf("mcp config: command entry %q missing command", entry)
+		}
+		channelName = strings.TrimSpace(strings.TrimPrefix(trimmed[:comma], "channel="))
+		rest := strings.TrimSpace(trimmed[comma+1:])
+		if !strings.HasPrefix(rest, "command=") {
+			return MCPChannelBinding{}, fmt.Errorf("mcp config: invalid entry %q (expected command=...)", entry)
+		}
+		rawCommand = strings.TrimSpace(strings.TrimPrefix(rest, "command="))
+	case strings.HasPrefix(trimmed, "command="):
+		rawCommand = strings.TrimSpace(strings.TrimPrefix(trimmed, "command="))
+		if comma := strings.LastIndex(rawCommand, ",channel="); comma >= 0 {
+			channelName = strings.TrimSpace(rawCommand[comma+len(",channel="):])
+			rawCommand = strings.TrimSpace(rawCommand[:comma])
+		}
+	default:
+		return MCPChannelBinding{}, fmt.Errorf("mcp config: invalid entry %q (expected channel=... or command=...)", entry)
+	}
+
+	if channelName == "" {
+		channelName = "main"
+	}
+	if rawCommand == "" {
+		return MCPChannelBinding{}, fmt.Errorf("mcp config: command entry %q missing command", entry)
+	}
+	if err := rejectUnsupportedQualifiedStdioSegments(rawCommand, entry); err != nil {
+		return MCPChannelBinding{}, err
+	}
+
+	channel, err := types.NormalizeChannel(channelName)
+	if err != nil {
+		return MCPChannelBinding{}, err
+	}
+	return buildMCPBinding(channel, MCPTransportStdio, rawCommand)
+}
+
+func rejectUnsupportedQualifiedStdioSegments(rawCommand, entry string) error {
+	for _, key := range []string{"http-proxy", "url", "client-cert", "client-key"} {
+		if strings.Contains(strings.ToLower(rawCommand), ","+key+"=") {
+			return fmt.Errorf("mcp config: unsupported key %q in entry %q", key, entry)
+		}
+	}
+	return nil
 }
 
 func buildMCPBinding(channel types.Channel, kind MCPTransportKind, rawValue string) (MCPChannelBinding, error) {

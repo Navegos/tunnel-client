@@ -13,14 +13,67 @@ For the customer-shareable network model and request flow, see
 
 ## 2) Build
 
-From the repository root:
+If you already have a `tunnel-client` binary, start there. The CLI now embeds
+the shortest first-use path:
 
 ```bash
-cd api/tunnel-client
+tunnel-client help quickstart
+tunnel-client help samples
+tunnel-client help plugin
+```
+
+The recommended binary-first path is:
+
+```bash
+tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id tunnel_0123456789abcdef0123456789abcdef
+```
+
+If you want a named profile instead of the one-command demo path:
+
+```bash
+tunnel-client init --sample sample_mcp_stdio_local --profile local-stdio --tunnel-id tunnel_0123456789abcdef0123456789abcdef --mcp-command "python /path/to/server.py"
+tunnel-client doctor --profile local-stdio --explain
+tunnel-client run --profile local-stdio
+```
+
+Other fast starts:
+
+- Remote HTTP MCP server with no OAuth/PRMD metadata:
+  `tunnel-client init --sample sample_mcp_remote_no_auth --profile remote-http --tunnel-id tunnel_... --mcp-server-url https://mcp.example.com/mcp`
+- Embedded demo MCP server for end-to-end validation:
+  `tunnel-client dev mcp-stub`
+  then
+  `tunnel-client init --sample sample_mcp_with_dcr --profile sample_mcp_with_dcr --tunnel-id tunnel_... --mcp-server-url http://127.0.0.1:NNNN/mcp`
+
+The embedded UI is served from the health listener. With the default
+`127.0.0.1:8080`, the UI is at `http://127.0.0.1:8080/ui`.
+
+If Codex is installed locally and you want the plugin surface instead of the raw
+binary flow, install it directly from the binary:
+
+```bash
+tunnel-client plugin codex install
+tunnel-client plugin codex uninstall
+```
+
+Starter prompts for Codex:
+
+- `Figure out what tunnel-client is for from the binary help, then get me to /ui with the shortest local path.`
+- `Use tunnel-client to create or reuse a profile, run doctor --explain, and then start the daemon.`
+- `Install the Codex plugin from the tunnel-client binary, connect the provided tunnel id, and tell me whether the runtime is launched, healthy, or ready.`
+
+## 3) Build from source
+
+From the `tunnel-client` module root:
+
+```bash
 go build -o bin/tunnel-client ./cmd/client
 ```
 
-## 3) Configure
+After building from source, use `./bin/tunnel-client` unless you add `bin/` to
+your `PATH`.
+
+## 4) Configure
 
 At minimum, you must set:
 
@@ -29,6 +82,14 @@ At minimum, you must set:
 - One `main` MCP binding:
   - `MCP_SERVER_URL` for a Streamable HTTP MCP endpoint, or
   - `--mcp.command` for a stdio MCP server.
+
+Auth split to keep straight:
+
+- `CONTROL_PLANE_API_KEY` / `OPENAI_API_KEY`: runtime key used by the daemon.
+- `tunnel-client admin tunnels get <tunnel_id>` can use that runtime key for
+  read-only metadata lookup.
+- `admin tunnels list/create/update/delete` require `OPENAI_ADMIN_KEY` or
+  `--admin-key`.
 
 Example:
 
@@ -62,7 +123,7 @@ For the full surface (flags, defaults, advanced knobs), see [`configuration.md`]
   on-prem or behind a firewall and not accessible from the internet or the
   tunnel-client host, the OAuth flow can fail.
 
-## 4) Run
+## 5) Run
 
 ```bash
 ./bin/tunnel-client run --log.level=info --log.format=struct-text
@@ -74,7 +135,7 @@ The process will:
 - Forward JSON-RPC requests to your MCP server.
 - Expose health endpoints on `HEALTH_LISTEN_ADDR` (default `:8080`).
 
-## 5) Verify
+## 6) Verify
 
 In another shell:
 
@@ -84,7 +145,7 @@ curl -fsS "http://127.0.0.1:8080/readyz"
 curl -fsS "http://127.0.0.1:8080/metrics" | head
 ```
 
-## 6) Next reads
+## 7) Next reads
 
 - **Deployments**: [`deployment/overview.md`](deployment/overview.md)
 - **Architecture**: [`architecture.md`](architecture.md)

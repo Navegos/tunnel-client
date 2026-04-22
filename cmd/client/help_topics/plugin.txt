@@ -1,0 +1,26 @@
+Use the Codex plugin when you want tunnel aliases, local process supervision, and Codex-native tunnel commands.
+
+Preferred install path from the binary:
+  tunnel-client plugin codex install
+
+To remove or reset the installed plugin bundle:
+  tunnel-client plugin codex uninstall
+
+If you want to inspect the bundle first:
+  tunnel-client plugin codex export --dir /tmp/tunnel-plugin
+  cd /tmp/tunnel-plugin && python3 scripts/install_plugin.py --tunnel-client-bin /path/to/tunnel-client
+
+If Codex is installed locally but the plugin is missing, doctor and startup guidance will point you back to:
+  tunnel-client plugin codex install
+
+Plugin runtime semantics:
+  - connect success means a usable local runtime exists, not merely that a launch command was issued
+  - healthy = the managed runtime is alive and /healthz is reachable
+  - ready is reported separately so agents can distinguish startup success from the full OAuth/MCP ready contract
+  - status reports local runtime state first and includes the explicit ui_url when available
+  - stop or disconnect tears down the managed local runtime without deleting the tunnel itself
+
+Useful plugin commands:
+  scripts/tunnel_mcp status <alias>
+  scripts/tunnel_mcp stop <alias>
+  scripts/tunnel_mcp disconnect <alias>

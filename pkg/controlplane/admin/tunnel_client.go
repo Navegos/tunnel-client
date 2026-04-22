@@ -156,7 +156,7 @@ func (c *AdminTunnelClient) do(ctx context.Context, method, path string, query u
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		errMsg := fmt.Sprintf("request %s %s failed: %d %s", method, target.Path, resp.StatusCode, strings.TrimSpace(string(msg)))
+		errMsg := formatAdminRequestError(method, target.Path, resp.StatusCode, strings.TrimSpace(string(msg)))
 		if requestID != "" {
 			errMsg = fmt.Sprintf("%s (x-request-id: %s)", errMsg, requestID)
 		}
@@ -178,4 +178,20 @@ func (c *AdminTunnelClient) do(ctx context.Context, method, path string, query u
 		return fmt.Errorf("decode response: %w", err)
 	}
 	return nil
+}
+
+func formatAdminRequestError(method, path string, statusCode int, body string) string {
+	if method == http.MethodDelete &&
+		statusCode == http.StatusNotFound &&
+		strings.HasPrefix(path, "/v1/tunnels/") &&
+		strings.Contains(body, "Invalid URL") {
+		return fmt.Sprintf(
+			"request %s %s failed: %d delete is not exposed on this control-plane base URL yet; get/list/create/update may still work (%s)",
+			method,
+			path,
+			statusCode,
+			body,
+		)
+	}
+	return fmt.Sprintf("request %s %s failed: %d %s", method, path, statusCode, body)
 }

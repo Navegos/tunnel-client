@@ -8,32 +8,50 @@ the long-running poll loop.
 
 ## Install
 
+If you already have a `tunnel-client` binary, prefer the binary-owned install
+surface so the plugin bundle always matches the binary version:
+
+```bash
+tunnel-client plugin codex install
+tunnel-client plugin codex uninstall
+```
+
+If you want to inspect the embedded bundle before installing it:
+
+```bash
+tunnel-client plugin codex export --dir /tmp/tunnel-mcp
+```
+
+Install that exported bundle from the export directory itself:
+
+```bash
+cd /tmp/tunnel-mcp
+python3 scripts/install_plugin.py --tunnel-client-bin /path/to/tunnel-client
+```
+
+If you are installing from a source checkout instead, use the local installer in
+this plugin directory.
+
 Install this directory as a local Codex plugin from either this repository root
 or a standalone `tunnel-client` checkout.
 
 Prerequisites:
 
-- `python3`
+- `python3` (Python 3.9+)
 - a Codex config directory, normally `~/.codex`
-- the Codex plugin installer script:
-  `skills/skills/install-codex-plugin/scripts/install_plugin.py`
 
-From this repository root:
+From a `tunnel-client` module root:
 
 ```bash
-python skills/skills/install-codex-plugin/scripts/install_plugin.py \
-  --source "$PWD/api/tunnel-client/plugins/tunnel-mcp"
-```
-
-From a standalone `tunnel-client` checkout:
-
-```bash
-python /path/to/install_plugin.py \
-  --source "$PWD/plugins/tunnel-mcp"
+python3 plugins/tunnel-mcp/scripts/install_plugin.py
 ```
 
 To install into a non-default Codex config directory, add
-`--codex-home /path/to/codex-home`.
+`--codex-home /path/to/codex-home`. The local installer also accepts
+`--source /path/to/plugin` and `--tunnel-client-bin /path/to/tunnel-client`.
+When possible it also persists a matching `tunnel-client` binary hint into the
+installed plugin bundle so Codex can use the plugin from an empty working
+directory without separately setting `TUNNEL_CLIENT_BIN`.
 
 The installer should print output like:
 
@@ -41,6 +59,7 @@ The installer should print output like:
 Installed tunnel-mcp@debug
 Target: /Users/you/.codex/plugins/cache/debug/tunnel-mcp/local
 Config: /Users/you/.codex/config.toml
+Tunnel client: /Users/you/code/tunnel-client/bin/tunnel-client
 ```
 
 Verify the install:
@@ -68,7 +87,10 @@ require repository-specific Python packages or build-system runfiles.
 
 Runtime prerequisites:
 
-- `tunnel-client` in `PATH`, or set `TUNNEL_CLIENT_BIN` to the binary path
+- a `tunnel-client` binary discoverable in this order:
+  `--tunnel-client-bin`, `TUNNEL_CLIENT_BIN`, an installed bundle hint,
+  adjacent source/build outputs such as `./tunnel-client` or `./bin/tunnel-client`,
+  then `PATH`
 
 ## Upgrade
 
@@ -76,8 +98,7 @@ Upgrade the plugin by rerunning the same install command with the newer plugin
 source:
 
 ```bash
-python skills/skills/install-codex-plugin/scripts/install_plugin.py \
-  --source "$PWD/api/tunnel-client/plugins/tunnel-mcp"
+python3 plugins/tunnel-mcp/scripts/install_plugin.py
 ```
 
 The installer replaces the cached plugin copy at
@@ -91,11 +112,30 @@ rewritten by the plugin cache upgrade.
 After upgrading, start a new Codex session and rerun the install verification
 commands above so Codex reloads the updated plugin and skill inventory.
 
+## Uninstall
+
+If the plugin was installed from the `tunnel-client` binary, prefer the
+matching binary-owned uninstall path:
+
+```bash
+tunnel-client plugin codex uninstall
+```
+
+That removes the cached plugin bundle plus the `tunnel-mcp@debug` enablement
+section from `config.toml` without touching unrelated Codex plugins. If you
+want a clean reinstall, rerun:
+
+```bash
+tunnel-client plugin codex uninstall
+tunnel-client plugin codex install
+```
+
 Optional:
 
 - `tmux` for tmux-managed background sessions. When `tmux` is unavailable, the
-  plugin starts `tunnel-client run --profile <name>` directly as a detached
-  background process and records its PID and log path in local state.
+  plugin starts `tunnel-client run --profile-dir <dir> --profile <name>`
+  directly as a detached background process and records its PID and log path in
+  local state.
 
 ## Environment
 
@@ -179,8 +219,34 @@ Inspect local and remote state:
 
 ```bash
 scripts/tunnel_mcp status awesome-mcp
+scripts/tunnel_mcp stop awesome-mcp
+# or:
+scripts/tunnel_mcp disconnect awesome-mcp
 scripts/tunnel_mcp list --organization-id org_123
 ```
+
+`status` always reports local runtime state first. When admin auth is missing or
+the remote tunnel no longer exists, the output still includes local profile,
+health, explicit `ui_url`, tmux/process, and log diagnostics. `connect` also reuses a locally known
+tunnel id when remote admin lookup fails. `connect` success now means a usable
+local runtime exists: the managed process or tmux session is still alive, the
+health URL file is populated, and `/healthz` is reachable. The payload exposes
+`launched`, `started`, `healthy`, and `ready` so agents can distinguish "launch
+command issued" from "healthy tunnel runtime exists". If the runtime dies
+immediately or never becomes healthy, `connect` returns a non-zero JSON payload
+instead of claiming `started=true`.
+
+`stop` and `disconnect` are local runtime controls only. They stop the managed
+tmux session or detached process, clear the local health URL file, and leave the
+remote tunnel itself intact.
+
+Auth split to keep straight:
+
+- runtime key: `CONTROL_PLANE_API_KEY` / `OPENAI_API_KEY`
+- read-only lookup: `tunnel-client admin tunnels get <tunnel_id>` can use the
+  runtime key
+- admin CRUD: `list`, `create`, `update`, and `delete` still require
+  `OPENAI_ADMIN_KEY` or `--admin-key`
 
 ## State Files
 

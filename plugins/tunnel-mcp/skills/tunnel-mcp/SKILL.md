@@ -8,6 +8,13 @@ description: Create, connect, list, and inspect MCP tunnels through the local tu
 Use `scripts/tunnel_mcp` from this plugin when a user asks Codex to manage MCP
 tunnels through `tunnel-client`.
 
+Preferred install surfaces:
+
+- `tunnel-client plugin codex install` when the binary is available
+- `tunnel-client plugin codex uninstall` when the installed plugin should be reset or removed
+- `python3 plugins/tunnel-mcp/scripts/install_plugin.py` from a source checkout
+- `python3 scripts/install_plugin.py` from an exported plugin bundle root
+
 ## Rules
 
 - Use `tunnel-client admin tunnels` for remote tunnel CRUD. Do not call raw

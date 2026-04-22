@@ -20,6 +20,7 @@ func TestRootCommandWithNoArgsPrintsHelp(t *testing.T) {
 	output := stdout.String()
 	require.Contains(t, output, "Commands:")
 	require.Contains(t, output, "run")
+	require.Contains(t, output, "connect a local or private MCP server")
 }
 
 func TestRootHelpListsSubcommands(t *testing.T) {
@@ -34,5 +35,6 @@ func TestRootHelpListsSubcommands(t *testing.T) {
 	output := stdout.String()
 	require.Contains(t, output, "Commands:")
 	require.Contains(t, output, "run")
+	require.Contains(t, output, "dev")
 	require.NotContains(t, output, "control-plane.base-url")
 }

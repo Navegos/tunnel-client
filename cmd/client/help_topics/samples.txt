@@ -1,0 +1,13 @@
+Built-in samples are discoverable from the CLI:
+
+  tunnel-client profiles samples list
+  tunnel-client profiles samples show sample_mcp_with_dcr
+
+Current built-in samples:
+  - sample_mcp_with_dcr: HTTP or stdio MCP target with the full OAuth/DCR-friendly contract
+  - sample_mcp_stdio_local: local stdio MCP command with the shortest first-use path
+  - sample_mcp_remote_no_auth: remote HTTP MCP server that does not advertise OAuth/PRMD metadata
+
+Profile creation surfaces:
+  - tunnel-client init --sample <name>
+  - tunnel-client profiles add <name> --sample sample_mcp_with_dcr ...

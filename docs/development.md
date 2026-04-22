@@ -5,12 +5,14 @@ This document is for contributors working on `tunnel-client`.
 ## Build
 
 ```bash
-cd api/tunnel-client
 ./scripts/build_admin_ui.sh ./adminui ./pkg/adminui/assets
 # or
 make admin-ui
 go build -o bin/tunnel-client ./cmd/client
 ```
+
+Use `./bin/tunnel-client` for local source-checkout runs unless `bin/` is on
+your `PATH`.
 
 ## Unit tests
 

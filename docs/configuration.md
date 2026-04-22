@@ -7,6 +7,37 @@ config file, or a named YAML profile.
 - **Requirement**: you must provide a control-plane API key, a tunnel ID, and a
   `main` MCP channel binding (via `--mcp.server-url` or `--mcp.command`).
 
+## Agent-first commands
+
+Use the CLI itself as the first discovery surface:
+
+- `tunnel-client help quickstart`
+- `tunnel-client help samples`
+- `tunnel-client help doctor`
+- `tunnel-client help oauth`
+- `tunnel-client help plugin`
+
+Use the first-run helpers before editing YAML by hand:
+
+- `tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id <tunnel_id>`
+- `tunnel-client init --sample <sample> --profile <name> --tunnel-id <tunnel_id> --mcp-server-url <url>`
+- `tunnel-client doctor --profile <name>`
+- `tunnel-client doctor --profile <name> --explain`
+- `tunnel-client profiles samples list`
+- `tunnel-client profiles samples show sample_mcp_with_dcr`
+- `tunnel-client dev mcp-stub`
+- `tunnel-client plugin codex install`
+- `tunnel-client plugin codex uninstall`
+
+`run --help` also advertises the config precedence, the sample-discovery path,
+and the embedded UI convention `http://<health.listen-addr>/ui`.
+
+Starter prompts for Codex:
+
+- `Figure out what tunnel-client is for from the binary help, then get me to /ui with the shortest local path.`
+- `Use tunnel-client to create or reuse a profile, run doctor --explain, and then start the daemon.`
+- `Install the Codex plugin from the tunnel-client binary, connect the provided tunnel id, and tell me whether the runtime is launched, healthy, or ready.`
+
 ## YAML config file
 
 Pass a config file with `--config /path/to/tunnel-client.yaml` or set
@@ -93,15 +124,50 @@ secrets are redacted before export.
 
 ## Commands
 
+- `init`: create a validated first-use profile and print the exact next commands.
+- `doctor`: validate the selected config or profile before daemon startup.
+- `help <topic>`: show embedded operator guidance for `quickstart`, `samples`,
+  `doctor`, `oauth`, or `plugin`.
 - `run`: start the tunnel client poll loop.
 - `profiles list`: list profile YAML files in the selected profile directory.
+- `profiles samples list`: enumerate built-in sample profiles.
+- `profiles samples show <name>`: print the sample plus required inputs and
+  caveats.
 - `profiles add <name>`: create a profile from `--from-file` or a built-in
   sample such as `--sample sample_mcp_with_dcr`.
 - `profiles edit <name>`: open a profile in `$VISUAL` or `$EDITOR`, validate it,
   and only save it when the edited YAML parses.
+- `plugin codex install`: install the embedded Tunnel MCP plugin bundle into
+  `CODEX_HOME`.
+- `plugin codex uninstall`: remove the embedded Tunnel MCP plugin bundle from
+  `CODEX_HOME` and clean up its enablement section from `config.toml`.
+- `plugin codex export --dir <path>`: export the embedded plugin bundle for
+  inspection or manual installation.
 - `admin tunnels`: manage tunnel metadata via the admin API (`/v1/tunnels*`).
-  Requires an admin key and org/workspace scope flags.
+- `admin tunnels get <id>`: read-only tunnel metadata lookup; accepts the
+  runtime key or an admin key.
+- `admin tunnels list|create|update|delete`: admin CRUD; requires an admin key
+  and explicit org/workspace/tenant scope flags.
 - `tunnel-client` with no subcommand prints help and available commands.
+
+## Built-in profile samples
+
+Built-in samples are stored as separate embedded files and validated in tests.
+The starter sample set is:
+
+- `sample_mcp_with_dcr`: general-purpose HTTP or stdio MCP target with the full
+  OAuth/DCR-friendly contract and `channel=main` already wired.
+- `sample_mcp_stdio_local`: shortest path for a local stdio MCP command.
+- `sample_mcp_remote_no_auth`: remote HTTP MCP server that does not advertise
+  OAuth/PRMD metadata.
+
+Use the sample surfaces instead of guessing sample names:
+
+```bash
+tunnel-client profiles samples list
+tunnel-client profiles samples show sample_mcp_with_dcr
+tunnel-client profiles add my-profile --sample sample_mcp_with_dcr --tunnel-id tunnel_0123456789abcdef0123456789abcdef --mcp-server-url http://127.0.0.1:3001/mcp
+```
 
 ## Control plane
 

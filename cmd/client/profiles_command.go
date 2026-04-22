@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -35,6 +34,7 @@ func newProfilesCommand(lookupEnv func(string) (string, bool), stdout io.Writer,
 	cmd.AddCommand(newProfilesListCommand(lookupEnv, &profileDir))
 	cmd.AddCommand(newProfilesAddCommand(lookupEnv, &profileDir))
 	cmd.AddCommand(newProfilesEditCommand(lookupEnv, &profileDir))
+	cmd.AddCommand(newProfilesSamplesCommand())
 	return cmd
 }
 
@@ -133,6 +133,78 @@ func newProfilesAddCommand(lookupEnv func(string) (string, bool), profileDir *st
 	cmd.Flags().StringVar(&mcpServerURL, "mcp-server-url", "", "MCP server URL for generated sample profiles")
 	cmd.Flags().StringVar(&mcpCommand, "mcp-command", "", "MCP command for generated sample profiles")
 	return cmd
+}
+
+func newProfilesSamplesCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "samples",
+		Short: "List or inspect built-in tunnel-client profile samples",
+	}
+	cmd.AddCommand(newProfilesSamplesListCommand())
+	cmd.AddCommand(newProfilesSamplesShowCommand())
+	return cmd
+}
+
+func newProfilesSamplesListCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List built-in profile sample names",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			for _, name := range sortedSampleNames() {
+				sample, ok := findProfileSample(name)
+				if !ok {
+					return fmt.Errorf("sample %q is registered but could not be loaded", name)
+				}
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\n", sample.Name, sample.Summary); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func newProfilesSamplesShowCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show <name>",
+		Short: "Show a built-in profile sample plus required inputs",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sample, ok := findProfileSample(args[0])
+			if !ok {
+				return fmt.Errorf("unknown sample %q; run `tunnel-client profiles samples list`", args[0])
+			}
+			data, err := sample.Generate(sample.Example)
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Sample: %s\n", sample.Name)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Summary: %s\n", sample.Summary)
+			if sample.UseWhen != "" {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Use when: %s\n", sample.UseWhen)
+			}
+			if len(sample.RequiredFlags) > 0 {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Required:\n")
+				for _, value := range sample.RequiredFlags {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", value)
+				}
+			}
+			if len(sample.OptionalFlags) > 0 {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Optional:\n")
+				for _, value := range sample.OptionalFlags {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", value)
+				}
+			}
+			if len(sample.Caveats) > 0 {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Notes:\n")
+				for _, value := range sample.Caveats {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", value)
+				}
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n%s", data)
+			return nil
+		},
+	}
 }
 
 func newProfilesEditCommand(lookupEnv func(string) (string, bool), profileDir *string) *cobra.Command {
@@ -235,42 +307,32 @@ func profileDataFromAddFlags(fromFile, sample, tunnelID, mcpServerURL, mcpComman
 		}
 		return data, nil
 	}
-	if sample != "sample_mcp_with_dcr" {
-		return nil, fmt.Errorf("unknown sample %q", sample)
+	if sample == "" {
+		return nil, fmt.Errorf("sample name is required")
 	}
-	tunnelID = strings.TrimSpace(tunnelID)
-	mcpServerURL = strings.TrimSpace(mcpServerURL)
-	mcpCommand = strings.TrimSpace(mcpCommand)
-	if tunnelID == "" {
-		return nil, fmt.Errorf("--sample sample_mcp_with_dcr requires --tunnel-id")
-	}
-	if (mcpServerURL == "") == (mcpCommand == "") {
-		return nil, fmt.Errorf("--sample sample_mcp_with_dcr requires exactly one of --mcp-server-url or --mcp-command")
-	}
-	return sampleMCPWithDCRProfile(tunnelID, mcpServerURL, mcpCommand), nil
+	return generateProfileSample(sample, sampleProfileRequest{
+		TunnelID:         tunnelID,
+		BaseURL:          "https://api.openai.com",
+		APIKeyRef:        "env:CONTROL_PLANE_API_KEY",
+		HealthListenAddr: defaultInitHealthListenAddr,
+		MCPServerURL:     mcpServerURL,
+		MCPCommand:       mcpCommand,
+	})
 }
 
 func sampleMCPWithDCRProfile(tunnelID, mcpServerURL, mcpCommand string) []byte {
-	var target string
-	if mcpServerURL != "" {
-		target = fmt.Sprintf("  server_urls:\n    - channel: main\n      url: %s\n", strconv.Quote(mcpServerURL))
-	} else {
-		target = fmt.Sprintf("  commands:\n    - channel: main\n      command: %s\n", strconv.Quote(mcpCommand))
+	data, err := generateSampleMCPWithDCRProfile(sampleProfileRequest{
+		TunnelID:         tunnelID,
+		BaseURL:          "https://api.openai.com",
+		APIKeyRef:        "env:CONTROL_PLANE_API_KEY",
+		HealthListenAddr: defaultInitHealthListenAddr,
+		MCPServerURL:     mcpServerURL,
+		MCPCommand:       mcpCommand,
+	})
+	if err != nil {
+		panic(err)
 	}
-	return []byte(fmt.Sprintf(`config_version: 1
-control_plane:
-  base_url: "https://api.openai.com"
-  tunnel_id: %s
-  api_key: env:CONTROL_PLANE_API_KEY
-health:
-  listen_addr: "127.0.0.1:8080"
-admin_ui:
-  open_browser: false
-log:
-  level: info
-  format: json
-mcp:
-%s`, strconv.Quote(tunnelID), target))
+	return data
 }
 
 func runProfileEditor(path string, lookupEnv func(string) (string, bool)) error {

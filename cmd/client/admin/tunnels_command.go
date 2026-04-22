@@ -24,8 +24,16 @@ func NewTunnelsCommand(lookupEnv func(string) (string, bool), stdout io.Writer, 
 	}
 
 	tunnelsCmd := &cobra.Command{
-		Use:           "tunnels",
-		Short:         "Manage tunnels via the control-plane admin API",
+		Use:   "tunnels",
+		Short: "Inspect or manage tunnels via the control-plane API",
+		Long: strings.TrimSpace(`
+Use tunnel inspection and CRUD commands for tunnel metadata.
+
+- tunnel-client admin tunnels get <tunnel_id> is a read-only metadata lookup and can use
+  either a runtime control-plane key (CONTROL_PLANE_API_KEY / OPENAI_API_KEY) or an admin key.
+- tunnel-client admin tunnels list, create, update, and delete require a real admin key
+  (OPENAI_ADMIN_KEY / --admin-key) plus explicit org/workspace/tenant scope as applicable.
+`),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -49,7 +57,11 @@ func newTunnelCreateCmd(lookupEnv func(string) (string, bool)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a tunnel",
-		Long:  "Create a tunnel with organization/workspace attachments. At least one org or workspace ID is required.",
+		Long: strings.TrimSpace(`
+Create a tunnel with organization/workspace attachments.
+
+This command requires a real admin API key. At least one org or workspace ID is required.
+`),
 		Example: strings.TrimSpace(`
   # Create with org + workspace scope
   tunnel-client admin tunnels create \
@@ -110,9 +122,28 @@ func newTunnelGetCmd(lookupEnv func(string) (string, bool)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <tunnel_id>",
 		Short: "Fetch a tunnel by id",
-		Args:  cobra.ExactArgs(1),
+		Long: strings.TrimSpace(`
+Fetch a tunnel by id.
+
+This read-only metadata lookup works with either:
+- a runtime control-plane key from CONTROL_PLANE_API_KEY / OPENAI_API_KEY, or
+- a real admin key from OPENAI_ADMIN_KEY / --admin-key.
+
+tunnel-client itself uses this lookup during startup to fetch tunnel metadata such as
+the operator-visible tunnel name and description.
+`),
+		Example: strings.TrimSpace(`
+  # Inspect a known tunnel with the runtime key used by tunnel-client itself
+  export CONTROL_PLANE_API_KEY=...
+  tunnel-client admin tunnels get tunnel_0123456789abcdef0123456789abcdef
+
+  # Inspect the same tunnel with an explicit admin key
+  export OPENAI_ADMIN_KEY=...
+  tunnel-client admin tunnels get tunnel_0123456789abcdef0123456789abcdef
+`),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, _, err := adminClientFromCmd(cmd, lookupEnv)
+			client, _, err := readOnlyAdminClientFromCmd(cmd, lookupEnv)
 			if err != nil {
 				return err
 			}
@@ -135,6 +166,11 @@ func newTunnelListCmd(lookupEnv func(string) (string, bool)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List tunnels filtered by organization or workspace",
+		Long: strings.TrimSpace(`
+List tunnels filtered by organization, workspace, or tenant.
+
+This command requires a real admin API key and exactly one explicit scope filter.
+`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, cfg, err := adminClientFromCmd(cmd, lookupEnv)
 			if err != nil {
@@ -179,7 +215,7 @@ func newTunnelUpdateCmd(lookupEnv func(string) (string, bool)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update <tunnel_id>",
 		Short: "Update a tunnel",
-		Long: "Update a tunnel; fields you set replace existing values.\n" +
+		Long: "Update a tunnel with a real admin API key; fields you set replace existing values.\n" +
 			"Organization/workspace lists are PUT-like replacements; omit the flags to keep existing edges.",
 		Example: strings.TrimSpace(`
   # Rename a tunnel and keep existing org/workspace edges
@@ -241,7 +277,10 @@ func newTunnelDeleteCmd(lookupEnv func(string) (string, bool)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <tunnel_id>",
 		Short: "Delete a tunnel (requires --confirm)",
-		Args:  cobra.ExactArgs(1),
+		Long: "Delete a tunnel with a real admin API key. This command also requires --confirm.\n" +
+			"Optional org/workspace flags are accepted for symmetry with other admin subcommands,\n" +
+			"but the current delete endpoint identifies the tunnel solely by id.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !confirm {
 				return errors.New("refusing to delete without --confirm")
@@ -263,6 +302,7 @@ func newTunnelDeleteCmd(lookupEnv func(string) (string, bool)) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&confirm, "confirm", false, "Required to delete a tunnel")
+	requireOrgsOrWorkspaces(cmd)
 	return cmd
 }
 
@@ -277,6 +317,82 @@ func adminClientFromCmd(cmd *cobra.Command, lookupEnv func(string) (string, bool
 		return nil, nil, err
 	}
 	return client, cfg, nil
+}
+
+func readOnlyAdminClientFromCmd(cmd *cobra.Command, lookupEnv func(string) (string, bool)) (*admin.AdminTunnelClient, *config.AdminConfig, error) {
+	fs := mergedFlagSet(cmd)
+	loadWithLookup := func(envLookup func(string) (string, bool)) (*admin.AdminTunnelClient, *config.AdminConfig, error) {
+		cfg, err := config.LoadAdminConfig(fs, envLookup)
+		if err != nil {
+			return nil, nil, err
+		}
+		client, err := admin.NewAdminTunnelClient(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		return client, cfg, nil
+	}
+
+	client, cfg, err := loadWithLookup(lookupEnv)
+	if err == nil {
+		return client, cfg, nil
+	}
+	if !readOnlyTunnelLookupCanFallback(fs, lookupEnv) {
+		return nil, nil, err
+	}
+
+	fallbackLookup := func(key string) (string, bool) {
+		if key == "OPENAI_ADMIN_KEY" {
+			if value, ok := lookupEnv("CONTROL_PLANE_API_KEY"); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value), true
+			}
+			if value, ok := lookupEnv("OPENAI_API_KEY"); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value), true
+			}
+		}
+		return lookupEnv(key)
+	}
+	client, cfg, fallbackErr := loadWithLookup(fallbackLookup)
+	if fallbackErr == nil {
+		return client, cfg, nil
+	}
+	if readOnlyTunnelLookupMissingKey(fallbackErr) {
+		return nil, nil, errors.New("tunnel get requires a runtime or admin key; set CONTROL_PLANE_API_KEY, OPENAI_API_KEY, OPENAI_ADMIN_KEY, or --admin-key")
+	}
+	return nil, nil, fallbackErr
+}
+
+func readOnlyTunnelLookupCanFallback(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) bool {
+	if lookupEnv == nil {
+		return false
+	}
+	if value, ok := lookupEnv("OPENAI_ADMIN_KEY"); ok && strings.TrimSpace(value) != "" {
+		return false
+	}
+	flagValue := ""
+	if flag := fs.Lookup("admin-key"); flag != nil {
+		flagValue = strings.TrimSpace(flag.Value.String())
+	}
+	switch flagValue {
+	case "", "env:OPENAI_ADMIN_KEY":
+		if value, ok := lookupEnv("CONTROL_PLANE_API_KEY"); ok && strings.TrimSpace(value) != "" {
+			return true
+		}
+		if value, ok := lookupEnv("OPENAI_API_KEY"); ok && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func readOnlyTunnelLookupMissingKey(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "admin key is required") ||
+		strings.Contains(message, "OPENAI_ADMIN_KEY") ||
+		strings.Contains(message, "environment variable OPENAI_ADMIN_KEY")
 }
 
 func mergedFlagSet(cmd *cobra.Command) *pflag.FlagSet {

@@ -1051,6 +1051,50 @@ func TestLoadParsesChannelQualifiedEntries(t *testing.T) {
 	}
 }
 
+func TestLoadParsesQualifiedMCPCommandWithCommaInCommandValue(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.command", `channel=main,command=python -c "print(1,2,3)"`,
+	}
+	cfg, err := Load(args, func(key string) (string, bool) {
+		if key == "OPENAI_API_KEY" {
+			return "key", true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.MCP.Command != `python -c "print(1,2,3)"` {
+		t.Fatalf("unexpected MCP command: %q", cfg.MCP.Command)
+	}
+	if got := cfg.MCP.CommandArgs; len(got) != 3 || got[0] != "python" || got[1] != "-c" || got[2] != "print(1,2,3)" {
+		t.Fatalf("unexpected MCP command args: %v", got)
+	}
+}
+
+func TestLoadParsesQualifiedMCPCommandWithTrailingChannelAndCommaInCommandValue(t *testing.T) {
+	args := []string{
+		"--control-plane.tunnel-id", flagTunnelID,
+		"--mcp.command", `command=python -c "print(1,2,3)",channel=main`,
+	}
+	cfg, err := Load(args, func(key string) (string, bool) {
+		if key == "OPENAI_API_KEY" {
+			return "key", true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.MCP.Command != `python -c "print(1,2,3)"` {
+		t.Fatalf("unexpected MCP command: %q", cfg.MCP.Command)
+	}
+	if got := cfg.MCP.CommandArgs; len(got) != 3 || got[2] != "print(1,2,3)" {
+		t.Fatalf("unexpected MCP command args: %v", got)
+	}
+}
+
 func TestLoadParsesEnvMCPEntries(t *testing.T) {
 	cfg, err := Load(nil, func(key string) (string, bool) {
 		switch key {

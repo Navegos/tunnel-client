@@ -44,6 +44,7 @@ class AliasRecord:
     tenant_ids: tuple[str, ...] = ()
     config_path: str = ""
     profile_name: str = ""
+    profile_dir: str = ""
     profile_path: str = ""
     health_url_file: str = ""
     updated_at: str = ""
@@ -61,6 +62,7 @@ class AliasRecord:
             tenant_ids=tuple(str(v) for v in raw.get("tenant_ids", [])),
             config_path=str(raw.get("config_path", "")),
             profile_name=str(raw.get("profile_name", "")),
+            profile_dir=str(raw.get("profile_dir", "")),
             profile_path=str(raw.get("profile_path", "")),
             health_url_file=str(raw.get("health_url_file", "")),
             updated_at=str(raw.get("updated_at", "")),
@@ -78,6 +80,7 @@ class AliasRecord:
             "tenant_ids": list(self.tenant_ids),
             "config_path": self.config_path,
             "profile_name": self.profile_name,
+            "profile_dir": self.profile_dir,
             "profile_path": self.profile_path,
             "health_url_file": self.health_url_file,
             "updated_at": self.updated_at,
@@ -96,6 +99,7 @@ class ProcessRecord:
     started_at: str
     admin_profile: str = ""
     profile_name: str = ""
+    profile_dir: str = ""
     profile_path: str = ""
     mode: str = "tmux"
     session_name: str = ""
@@ -113,6 +117,7 @@ class ProcessRecord:
             pid=int(raw.get("pid", 0) or 0),
             config_path=str(raw.get("config_path", "")),
             profile_name=str(raw.get("profile_name", "")),
+            profile_dir=str(raw.get("profile_dir", "")),
             profile_path=str(raw.get("profile_path", "")),
             health_url_file=str(raw.get("health_url_file", "")),
             target_kind=str(raw.get("target_kind", "")),
@@ -132,6 +137,7 @@ class ProcessRecord:
             "pid": self.pid,
             "config_path": self.config_path,
             "profile_name": self.profile_name,
+            "profile_dir": self.profile_dir,
             "profile_path": self.profile_path,
             "health_url_file": self.health_url_file,
             "target_kind": self.target_kind,
@@ -168,7 +174,9 @@ class AdminProfile:
 
 
 def utc_now() -> str:
-    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    )
 
 
 def normalize_alias(alias: str) -> str:
@@ -247,7 +255,11 @@ def save_admin_profiles(
 
 
 def append_history(
-    action: str, alias: str, tunnel_id: str | None, detail: str = "", root: Path | None = None
+    action: str,
+    alias: str,
+    tunnel_id: str | None,
+    detail: str = "",
+    root: Path | None = None,
 ) -> None:
     path = _path(root, "history.md")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -263,7 +275,8 @@ def reject_inline_secret_material(value: str, *, field: str) -> None:
     for pattern in _SECRET_PATTERNS:
         if pattern.search(value):
             raise StateError(
-                f"{field} appears to contain inline secret material; use env or file references instead"
+                f"{field} appears to contain inline secret material; use env or "
+                "file references instead"
             )
     for token, next_token in _command_token_pairs(value):
         if not _SECRET_FLAG_PATTERN.match(token):
@@ -272,7 +285,8 @@ def reject_inline_secret_material(value: str, *, field: str) -> None:
             continue
         if next_token and not next_token.startswith("-") and not _is_secret_reference(next_token):
             raise StateError(
-                f"{field} appears to contain inline secret material; use env or file references instead"
+                f"{field} appears to contain inline secret material; use env or "
+                "file references instead"
             )
 
 
@@ -305,6 +319,7 @@ def alias_record_from_tunnel(
     description: str = "",
     config_path: str = "",
     profile_name: str = "",
+    profile_dir: str = "",
     profile_path: str = "",
     health_url_file: str = "",
 ) -> AliasRecord:
@@ -319,6 +334,7 @@ def alias_record_from_tunnel(
         tenant_ids=tuple(str(v) for v in tunnel.get("tenant_ids", [])),
         config_path=config_path,
         profile_name=profile_name,
+        profile_dir=profile_dir,
         profile_path=profile_path,
         health_url_file=health_url_file,
         updated_at=utc_now(),

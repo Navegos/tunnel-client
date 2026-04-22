@@ -49,6 +49,36 @@ func TestDeleteRequiresConfirm(t *testing.T) {
 	require.Contains(t, err.Error(), "refusing to delete")
 }
 
+func TestDeleteAcceptsOptionalScopeFlags(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"tunnel_123","name":"test"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	root := NewAdminCommand(func(key string) (string, bool) {
+		if key == "OPENAI_ADMIN_KEY" {
+			return "admin", true
+		}
+		return "", false
+	}, io.Discard, io.Discard)
+
+	root.SetArgs([]string{
+		"tunnels", "delete", "tunnel_123",
+		"--control-plane.base-url", server.URL,
+		"--organization-id", "org-1",
+		"--workspace-id", "ws-1",
+		"--confirm",
+	})
+
+	require.NoError(t, root.Execute())
+	require.Equal(t, "/v1/tunnels/tunnel_123", gotPath)
+}
+
 func TestListRequiresSingleScope(t *testing.T) {
 	t.Parallel()
 
@@ -118,6 +148,7 @@ func TestTunnelsHelpUsesSubcommandHelp(t *testing.T) {
 
 	help := out.String()
 	require.Contains(t, help, "create")
+	require.Contains(t, help, "runtime control-plane key")
 }
 
 func TestTunnelSubcommandExamplesUseAdminPath(t *testing.T) {
@@ -183,6 +214,67 @@ func TestCreateRejectsDuplicateScope(t *testing.T) {
 	err := root.Execute()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate organization-id")
+}
+
+func TestGetFallsBackToRuntimeKeyWhenAdminKeyIsMissing(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/tunnels/tunnel_123", r.URL.Path)
+		require.Equal(t, "Bearer runtime-key", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"tunnel_123","name":"runtime tunnel","description":"metadata"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	root := NewAdminCommand(func(key string) (string, bool) {
+		if key == "CONTROL_PLANE_API_KEY" {
+			return "runtime-key", true
+		}
+		return "", false
+	}, io.Discard, io.Discard)
+
+	root.SetArgs([]string{
+		"tunnels", "get", "tunnel_123",
+		"--control-plane.base-url", server.URL,
+	})
+
+	require.NoError(t, root.Execute())
+}
+
+func TestListStillRequiresAdminKey(t *testing.T) {
+	t.Parallel()
+
+	root := NewAdminCommand(func(key string) (string, bool) {
+		if key == "CONTROL_PLANE_API_KEY" {
+			return "runtime-key", true
+		}
+		return "", false
+	}, io.Discard, io.Discard)
+
+	root.SetArgs([]string{
+		"tunnels", "list",
+		"--organization-id", "org-1",
+	})
+
+	err := root.Execute()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "OPENAI_ADMIN_KEY")
+}
+
+func TestGetHelpExplainsRuntimeVsAdminKeySplit(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	root := NewAdminCommand(func(string) (string, bool) { return "", false }, &out, io.Discard)
+
+	root.SetArgs([]string{"tunnels", "get", "--help"})
+	require.NoError(t, root.Execute())
+
+	help := out.String()
+	require.Contains(t, help, "runtime control-plane key")
+	require.Contains(t, help, "CONTROL_PLANE_API_KEY")
+	require.Contains(t, help, "OPENAI_ADMIN_KEY")
 }
 
 func TestCreateRequiresScope(t *testing.T) {

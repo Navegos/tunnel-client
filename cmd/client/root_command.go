@@ -14,6 +14,7 @@ func newRootCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 	rootCmd := &cobra.Command{
 		Use:           "tunnel-client",
 		Short:         "Tunnel client for the OpenAI MCP control plane",
+		Long:          rootCommandLong(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -23,9 +24,14 @@ func newRootCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 	rootCmd.Version = tunnelClientVersion()
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
 
+	rootCmd.AddCommand(newInitCommand(lookupEnv, stdout, stderr))
+	rootCmd.AddCommand(newDoctorCommand(lookupEnv, stdout, stderr))
 	rootCmd.AddCommand(newRunCommand(lookupEnv))
+	rootCmd.AddCommand(newDevCommand(stdout, stderr))
 	rootCmd.AddCommand(newProfilesCommand(lookupEnv, stdout, stderr))
+	rootCmd.AddCommand(newPluginCommand(lookupEnv, stdout, stderr))
 	rootCmd.AddCommand(admincmd.NewAdminCommand(lookupEnv, stdout, stderr))
+	rootCmd.SetHelpCommand(newHelpCommand(rootCmd, stdout, stderr))
 
 	return rootCmd
 }

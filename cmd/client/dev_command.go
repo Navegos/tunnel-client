@@ -1,0 +1,77 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"github.com/spf13/cobra"
+	"io"
+	"time"
+)
+
+func newDevCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "dev",
+		Short:         "Developer helpers for local tunnel-client validation",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	cmd.AddCommand(newDevMCPStubCommand(stdout, stderr))
+	return cmd
+}
+
+func newDevMCPStubCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
+	var (
+		listenAddr    string
+		serverName    string
+		serverVersion string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "mcp-stub",
+		Short: "Run a local MCP + OAuth stub for first-use tunnel-client validation",
+		Long: `Run a local Streamable HTTP MCP stub with the OAuth Protected Resource Metadata
+and OAuth authorization-server metadata endpoints that tunnel-client expects
+during doctor/run validation.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			stub, err := startDevMCPStub(devMCPStubOptions{
+				ListenAddr:    listenAddr,
+				ServerName:    serverName,
+				ServerVersion: serverVersion,
+			})
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "MCP stub listening on %s\n", stub.BaseURL.String())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "MCP URL: %s\n", stub.MCPURL())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Protected resource metadata: %s\n", stub.ProtectedResourceMetadataURL())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Authorization server metadata: %s\n", stub.AuthorizationServerMetadataURL())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "These are the demo MCP/OAuth endpoints only. tunnel-client health/ui URLs come from the daemon health listener after `run` starts.\n")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Next:\n")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  tunnel-client init --sample sample_mcp_with_dcr --profile sample_mcp_with_dcr --tunnel-id tunnel_... --mcp-server-url %s\n", stub.MCPURL())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  tunnel-client doctor --profile sample_mcp_with_dcr --explain\n")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  tunnel-client run --profile sample_mcp_with_dcr\n")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Try in ChatGPT after the tunnel is connected:\n")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  - Use the server_info tool and summarize the demo MCP server.\n")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  - Use the echo tool with input \"hello from tunnel-client\".\n")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  - Use the uppercase tool on \"openai tunnel\".\n")
+
+			select {
+			case <-cmd.Context().Done():
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				return stub.Shutdown(shutdownCtx)
+			case err := <-stub.errCh:
+				stub.errCh = nil
+				return err
+			}
+		},
+	}
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	cmd.Flags().StringVar(&listenAddr, "listen-addr", defaultDevMCPStubListenAddr, "Listen address for the local MCP stub")
+	cmd.Flags().StringVar(&serverName, "server-name", defaultDevMCPStubName, "Server name advertised during MCP initialize")
+	cmd.Flags().StringVar(&serverVersion, "server-version", defaultDevMCPStubVersion, "Server version advertised during MCP initialize")
+	return cmd
+}

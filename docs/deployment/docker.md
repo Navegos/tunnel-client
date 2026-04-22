@@ -3,7 +3,6 @@
 ## Build image
 
 ```bash
-cd api/tunnel-client
 DOCKER_BUILDKIT=1 docker build \
   --build-arg GIT_SHA="$(git rev-parse HEAD)" \
   -t tunnel-client:latest \
