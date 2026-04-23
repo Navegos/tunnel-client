@@ -51,6 +51,9 @@ func TestHelpTopicQuickstart(t *testing.T) {
 	require.Contains(t, stdout, canonicalRuntimeAPIKeysURL)
 	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
 	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
+	require.Contains(t, stdout, "CONTROL_PLANE_TUNNEL_ID")
+	require.Contains(t, stdout, "CONTROL_PLANE_API_KEY")
+	require.Contains(t, stdout, "Do not give the admin key to the long-lived daemon.")
 	require.Contains(t, stdout, "Create or verify the connector in ChatGPT settings only while tunnel-client is running.")
 	require.Contains(t, stdout, "Keep tunnel-client up for connector discovery and every MCP call from ChatGPT.")
 }
@@ -67,6 +70,9 @@ func TestHelpTopicDoctor(t *testing.T) {
 	require.Contains(t, stdout, canonicalRuntimeAPIKeysURL)
 	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
 	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
+	require.Contains(t, stdout, "CONTROL_PLANE_TUNNEL_ID")
+	require.Contains(t, stdout, "CONTROL_PLANE_API_KEY")
+	require.Contains(t, stdout, "OPENAI_ADMIN_KEY")
 	require.Contains(t, stdout, "Create or verify the connector in ChatGPT settings only while tunnel-client is running.")
 	require.Contains(t, stdout, "Keep tunnel-client up for connector discovery and every MCP call from ChatGPT.")
 }

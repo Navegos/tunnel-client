@@ -18,6 +18,16 @@ Use these exact setup pages when you need to create or inspect those values:
 - Admin API keys: `https://platform.openai.com/settings/organization/admin-keys`
 - ChatGPT connector settings: `https://chatgpt.com/#settings/Connectors`
 
+Which value comes from where:
+
+- `CONTROL_PLANE_TUNNEL_ID`: create or inspect it in Tunnels management, or via
+  `tunnel-client admin tunnels create|list|get ...` with `OPENAI_ADMIN_KEY`.
+- `CONTROL_PLANE_API_KEY`: create it in Runtime API keys; this is the key used
+  by `tunnel-client doctor` and `tunnel-client run`.
+- `OPENAI_ADMIN_KEY`: only for `tunnel-client admin tunnels
+  list|create|update|delete`. Do not use the admin key for the long-lived
+  daemon.
+
 ## 2) First-run paths
 
 If you already have a `tunnel-client` binary, start there. The CLI now embeds
@@ -53,10 +63,13 @@ tunnel-client run --profile local-stdio
 ```
 
 If you still need the tunnel id or runtime/admin keys, open the matching setup
-URL above before running `init`. Create or verify the connector from the
-ChatGPT settings URL above only while `tunnel-client run ...` is healthy, and
-keep the daemon running for connector discovery and every MCP call from
-ChatGPT.
+URL above before running `init`. If your rollout has self-serve tunnel access,
+create the tunnel yourself in Tunnels management or with
+`tunnel-client admin tunnels create`, then export the returned id as
+`CONTROL_PLANE_TUNNEL_ID` and a separate runtime key as
+`CONTROL_PLANE_API_KEY`. Create or verify the connector from the ChatGPT
+settings URL above only while `tunnel-client run ...` is healthy, and keep the
+daemon running for connector discovery and every MCP call from ChatGPT.
 
 Other fast starts:
 

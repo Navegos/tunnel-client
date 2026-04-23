@@ -290,7 +290,7 @@ func mapConfigErrorToDoctorCheck(err error, source config.ConfigSource) doctorCh
 			fmt.Sprintf("create or inspect the tunnel in %s", canonicalTunnelsManagementURL),
 			"run `tunnel-client admin tunnels get <tunnel_id>` if you already know the tunnel id; this read-only lookup works with the runtime key",
 			fmt.Sprintf("if you need admin CRUD or discovery, create or inspect an admin key in %s and then run `tunnel-client admin tunnels create --help` or `tunnel-client admin tunnels list --help`", canonicalAdminAPIKeysURL),
-			"once you have a tunnel id, create a first profile with `tunnel-client init --profile sample_mcp_with_dcr --tunnel-id tunnel_... --mcp-server-url http://127.0.0.1:3001/mcp`",
+			"once you have a tunnel id, create a first profile with `tunnel-client init --sample sample_mcp_with_dcr --profile sample_mcp_with_dcr --tunnel-id tunnel_... --mcp-server-url http://127.0.0.1:3001/mcp`",
 			"or set --control-plane.tunnel-id or CONTROL_PLANE_TUNNEL_ID to a tunnel_<32 lowercase hex> value",
 			connectorSettingsRuntimeNote(doctorNextCommand(source)),
 			"for the full first-use flow run `tunnel-client help quickstart`",
@@ -302,7 +302,7 @@ func mapConfigErrorToDoctorCheck(err error, source config.ConfigSource) doctorCh
 			fmt.Sprintf("create or inspect the runtime key in %s", canonicalRuntimeAPIKeysURL),
 			"export CONTROL_PLANE_API_KEY=...",
 			"if your tunnel key already lives in another environment variable, map it with `export CONTROL_PLANE_API_KEY=$YOUR_EXISTING_TUNNEL_KEY_ENV`",
-			fmt.Sprintf("if you also need admin CRUD, the admin-key page is %s", canonicalAdminAPIKeysURL),
+			fmt.Sprintf("if you also need admin CRUD, create a separate admin key in %s", canonicalAdminAPIKeysURL),
 			"rerun: tunnel-client doctor",
 			"if it passes, run: " + doctorNextCommand(source),
 		}

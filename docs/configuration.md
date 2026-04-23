@@ -33,6 +33,16 @@ Use the first-run helpers before editing YAML by hand:
 - `tunnel-client codex plugin install`
 - `tunnel-client codex plugin uninstall`
 
+Keep the key split straight during first use:
+
+- `CONTROL_PLANE_TUNNEL_ID`: create or inspect it in Tunnels management, or via
+  `tunnel-client admin tunnels create|list|get ...` with `OPENAI_ADMIN_KEY`.
+- `CONTROL_PLANE_API_KEY`: create it in Runtime API keys; this is the key used
+  by `tunnel-client doctor` and `tunnel-client run`.
+- `OPENAI_ADMIN_KEY`: only for `tunnel-client admin tunnels
+  list|create|update|delete`. Do not use the admin key for the long-lived
+  daemon.
+
 `run --help` also advertises the config precedence, the sample-discovery path,
 and the embedded UI convention `http://<health.listen-addr>/ui`.
 

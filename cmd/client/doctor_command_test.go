@@ -95,6 +95,7 @@ func TestDoctorMissingTunnelIDExplainIncludesConnectorRuntimeNote(t *testing.T) 
 	require.Contains(t, stdout, canonicalTunnelsManagementURL)
 	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
 	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
+	require.Contains(t, stdout, "tunnel-client init --sample sample_mcp_with_dcr --profile sample_mcp_with_dcr")
 	require.Contains(t, stdout, "Create or verify the connector in https://chatgpt.com/#settings/Connectors only while `tunnel-client run` is running.")
 	require.Contains(t, stdout, "Keep the daemon up for connector discovery and every MCP call from ChatGPT.")
 }

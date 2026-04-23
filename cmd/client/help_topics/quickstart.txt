@@ -11,6 +11,14 @@ Canonical setup URLs:
   Admin API keys: https://platform.openai.com/settings/organization/admin-keys
   ChatGPT connector settings: https://chatgpt.com/#settings/Connectors
 
+Which value comes from where:
+  - `CONTROL_PLANE_TUNNEL_ID`: create or inspect it in Tunnels management, or use
+    `tunnel-client admin tunnels create|list|get ...` with `OPENAI_ADMIN_KEY`.
+  - `CONTROL_PLANE_API_KEY`: create it in Runtime API keys; this is the key the daemon
+    uses for `tunnel-client doctor` and `tunnel-client run`.
+  - `OPENAI_ADMIN_KEY`: only for `tunnel-client admin tunnels list|create|update|delete`.
+    Do not give the admin key to the long-lived daemon.
+
 If you only have the source checkout:
   make admin-ui
   go build -o bin/tunnel-client ./cmd/client
@@ -64,6 +72,11 @@ If you already know a tunnel id and only need metadata:
 
 If you need create/list/update/delete:
   tunnel-client admin tunnels ...                # admin key required
+
+If your rollout has self-serve tunnel access:
+  - create the tunnel yourself in Tunnels management or with `tunnel-client admin tunnels create`
+  - use the returned tunnel id as `CONTROL_PLANE_TUNNEL_ID`
+  - create a separate runtime key from Runtime API keys and export it as `CONTROL_PLANE_API_KEY`
 
 Useful follow-ups:
   tunnel-client codex assistant "Summarize what tunnel-client is for."
