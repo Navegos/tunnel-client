@@ -205,7 +205,7 @@ func firstUseGuidance(err error) string {
 		return "run `tunnel-client admin tunnels create --help` or `tunnel-client admin tunnels list --help` to acquire a tunnel id, then materialize a profile with `tunnel-client init`; for the full first-use flow run `tunnel-client help quickstart`"
 	}
 	if strings.Contains(message, "main channel is required") {
-		return "for the shortest demo path run `tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id tunnel_...`; otherwise create a profile with `tunnel-client init` or run `tunnel-client help quickstart`"
+		return "for the shortest demo path run `tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id tunnel_... --health.listen-addr 127.0.0.1:0 --health.url-file /tmp/tunnel-client-health.url`; otherwise create a profile with `tunnel-client init` or run `tunnel-client help quickstart`"
 	}
 	return "for first-time setup run `tunnel-client help quickstart` or create a profile with `tunnel-client init`"
 }

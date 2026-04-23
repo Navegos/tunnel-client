@@ -30,7 +30,10 @@ func newInitCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 		Short: "Create a runnable first-use tunnel-client profile",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(tunnelID) == "" {
-				return fmt.Errorf("tunnel ID is required; use `tunnel-client admin tunnels create --help` or `tunnel-client admin tunnels list --help` to acquire one, then rerun `tunnel-client init`; for the full first-use flow run `tunnel-client help quickstart`")
+				return fmt.Errorf(
+					"tunnel ID is required.\n%s\nUse `tunnel-client admin tunnels create --help` or `tunnel-client admin tunnels list --help` to acquire one, then rerun `tunnel-client init`; for the full first-use flow run `tunnel-client help quickstart`",
+					strings.Join(canonicalWebPropertyLines("Canonical setup URLs:"), "\n"),
+				)
 			}
 			name := strings.TrimSpace(profileName)
 			if name == "" {
@@ -67,6 +70,10 @@ func newInitCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Next:\n")
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  tunnel-client doctor --profile %s\n", name)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  tunnel-client run --profile %s\n", name)
+			for _, line := range canonicalWebPropertyLines("Canonical setup URLs:") {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), line)
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Connector runtime note:\n  %s\n", connectorSettingsRuntimeNote(fmt.Sprintf("tunnel-client run --profile %s", name)))
 			return nil
 		},
 	}

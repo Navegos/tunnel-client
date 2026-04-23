@@ -19,6 +19,13 @@ network while OpenAI products use an OpenAI-hosted MCP tunnel URL.
 
 ## For Codex / Claude / Copilot
 
+Use these exact setup pages during first use:
+
+- Tunnels management: `https://platform.openai.com/settings/organization/tunnels`
+- Runtime API keys: `https://platform.openai.com/settings/organization/api-keys`
+- Admin API keys: `https://platform.openai.com/settings/organization/admin-keys`
+- ChatGPT connector settings: `https://chatgpt.com/#settings/Connectors`
+
 Binary-first flow:
 
 ```bash
@@ -29,6 +36,11 @@ tunnel-client init --sample sample_mcp_stdio_local --profile local-stdio --tunne
 tunnel-client doctor --profile local-stdio --explain
 tunnel-client run --profile local-stdio
 ```
+
+If you need the tunnel id or runtime/admin keys first, open the matching URL
+above before running `init`. Create or verify the connector from the ChatGPT
+settings URL above only while `tunnel-client run ...` is healthy, and keep the
+daemon running for connector discovery and every MCP call from ChatGPT.
 
 Source-checkout build path:
 

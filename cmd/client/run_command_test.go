@@ -84,6 +84,8 @@ func TestRunReportsHowToConfigureMainMCPChannel(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "set --mcp.server-url or --mcp.command")
 	require.Contains(t, err.Error(), "tunnel-client run --embedded-mcp-stub")
+	require.Contains(t, err.Error(), "--health.listen-addr 127.0.0.1:0")
+	require.Contains(t, err.Error(), "--health.url-file /tmp/tunnel-client-health.url")
 	require.Contains(t, err.Error(), "tunnel-client init")
 }
 

@@ -4,7 +4,12 @@ control_plane:
   tunnel_id: {{ printf "%q" .TunnelID }}
   api_key: {{ printf "%q" .APIKeyRef }}
 health:
+  # Keep a fixed port when you want a stable local admin URL.
+  # For concurrent or clean-room runs, switch listen_addr to "127.0.0.1:0" and
+  # set url_file so another process can discover the resolved /healthz, /readyz,
+  # /metrics, and /ui base URL.
   listen_addr: {{ printf "%q" .HealthListenAddr }}
+  # url_file: "/tmp/tunnel-client-health.url"
 admin_ui:
   open_browser: {{ .OpenBrowser }}
 log:

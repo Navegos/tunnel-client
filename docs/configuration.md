@@ -19,7 +19,7 @@ Use the CLI itself as the first discovery surface:
 
 Use the first-run helpers before editing YAML by hand:
 
-- `tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id <tunnel_id>`
+- `tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id <tunnel_id> --health.listen-addr 127.0.0.1:0 --health.url-file /tmp/tunnel-client-health.url`
 - `tunnel-client init --sample <sample> --profile <name> --tunnel-id <tunnel_id> --mcp-server-url <url>`
 - `tunnel-client doctor --profile <name>`
 - `tunnel-client doctor --profile <name> --explain`

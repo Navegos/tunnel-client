@@ -27,6 +27,10 @@ func TestRootHelpAdvertisesAgentFirstTopicsAndCommands(t *testing.T) {
 	require.Contains(t, stdout, "codex")
 	require.Contains(t, stdout, "tunnel-client codex assistant")
 	require.Contains(t, stdout, "connect a local or private MCP server")
+	require.Contains(t, stdout, canonicalTunnelsManagementURL)
+	require.Contains(t, stdout, canonicalRuntimeAPIKeysURL)
+	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
+	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
 }
 
 func TestHelpTopicQuickstart(t *testing.T) {
@@ -43,6 +47,28 @@ func TestHelpTopicQuickstart(t *testing.T) {
 	require.Contains(t, stdout, "sample_mcp_remote_no_auth")
 	require.Contains(t, stdout, "tunnel-client doctor")
 	require.Contains(t, stdout, "tunnel-client run")
+	require.Contains(t, stdout, canonicalTunnelsManagementURL)
+	require.Contains(t, stdout, canonicalRuntimeAPIKeysURL)
+	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
+	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
+	require.Contains(t, stdout, "Create or verify the connector in ChatGPT settings only while tunnel-client is running.")
+	require.Contains(t, stdout, "Keep tunnel-client up for connector discovery and every MCP call from ChatGPT.")
+}
+
+func TestHelpTopicDoctor(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "help", "doctor")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, canonicalTunnelsManagementURL)
+	require.Contains(t, stdout, canonicalRuntimeAPIKeysURL)
+	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
+	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
+	require.Contains(t, stdout, "Create or verify the connector in ChatGPT settings only while tunnel-client is running.")
+	require.Contains(t, stdout, "Keep tunnel-client up for connector discovery and every MCP call from ChatGPT.")
 }
 
 func TestEmbeddedHelpTopicsLoad(t *testing.T) {
@@ -79,6 +105,12 @@ func TestInitWritesValidatedProfile(t *testing.T) {
 	require.Contains(t, stdout, "Created profile demo")
 	require.Contains(t, stdout, "tunnel-client doctor --profile demo")
 	require.Contains(t, stdout, "tunnel-client run --profile demo")
+	require.Contains(t, stdout, canonicalTunnelsManagementURL)
+	require.Contains(t, stdout, canonicalRuntimeAPIKeysURL)
+	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
+	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
+	require.Contains(t, stdout, "Create or verify the connector in https://chatgpt.com/#settings/Connectors only while `tunnel-client run --profile demo` is running.")
+	require.Contains(t, stdout, "Keep the daemon up for connector discovery and every MCP call from ChatGPT.")
 }
 
 func TestInitWithoutTunnelIDPointsToQuickstartAndAdminFlows(t *testing.T) {
@@ -92,6 +124,10 @@ func TestInitWithoutTunnelIDPointsToQuickstartAndAdminFlows(t *testing.T) {
 	require.Empty(t, stderr)
 	require.Contains(t, err.Error(), "tunnel-client admin tunnels create --help")
 	require.Contains(t, err.Error(), "tunnel-client help quickstart")
+	require.Contains(t, err.Error(), canonicalTunnelsManagementURL)
+	require.Contains(t, err.Error(), canonicalRuntimeAPIKeysURL)
+	require.Contains(t, err.Error(), canonicalAdminAPIKeysURL)
+	require.Contains(t, err.Error(), canonicalChatGPTConnectorSettingsURL)
 }
 
 func TestProfilesSamplesListAndShow(t *testing.T) {

@@ -49,6 +49,10 @@ func TestDoctorSuccess(t *testing.T) {
 	require.Contains(t, stdout, "CHECK ui")
 	require.Contains(t, stdout, "RESULT ok")
 	require.Contains(t, stdout, "NEXT   tunnel-client run")
+	require.Contains(t, stdout, canonicalTunnelsManagementURL)
+	require.Contains(t, stdout, canonicalRuntimeAPIKeysURL)
+	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
+	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
 }
 
 func TestDoctorFailureExplain(t *testing.T) {
@@ -69,6 +73,30 @@ func TestDoctorFailureExplain(t *testing.T) {
 	require.Contains(t, stdout, "FAILED_CHECKS control_plane_api_key")
 	require.Contains(t, stdout, "Why this matters:")
 	require.Contains(t, stdout, "What to do next:")
+	require.Contains(t, stdout, canonicalRuntimeAPIKeysURL)
+	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
+}
+
+func TestDoctorMissingTunnelIDExplainIncludesConnectorRuntimeNote(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME":                  t.TempDir(),
+		"CONTROL_PLANE_API_KEY": "test-api-key",
+	}, "doctor",
+		"--mcp.command", "python server.py",
+		"--explain",
+	)
+
+	require.Error(t, err)
+	require.Empty(t, stderr)
+	require.Equal(t, 2, exitCode(err))
+	require.Contains(t, stdout, "FAILED_CHECKS tunnel_id")
+	require.Contains(t, stdout, canonicalTunnelsManagementURL)
+	require.Contains(t, stdout, canonicalAdminAPIKeysURL)
+	require.Contains(t, stdout, canonicalChatGPTConnectorSettingsURL)
+	require.Contains(t, stdout, "Create or verify the connector in https://chatgpt.com/#settings/Connectors only while `tunnel-client run` is running.")
+	require.Contains(t, stdout, "Keep the daemon up for connector discovery and every MCP call from ChatGPT.")
 }
 
 func TestDoctorDetectsHealthListenerBindConflictByDefault(t *testing.T) {

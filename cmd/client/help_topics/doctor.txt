@@ -5,6 +5,12 @@ Recommended flow:
   tunnel-client doctor --profile <name> --explain
   tunnel-client doctor --profile <name> --json
 
+Canonical setup URLs:
+  Tunnels management: https://platform.openai.com/settings/organization/tunnels
+  Runtime API keys: https://platform.openai.com/settings/organization/api-keys
+  Admin API keys: https://platform.openai.com/settings/organization/admin-keys
+  ChatGPT connector settings: https://chatgpt.com/#settings/Connectors
+
 Use doctor to confirm:
   - what product surface you are about to start: the tunnel daemon plus /healthz, /readyz, and /ui
   - which config source was selected
@@ -16,6 +22,10 @@ Use doctor to confirm:
     - GET /.well-known/oauth-protected-resource/mcp
     - GET /.well-known/oauth-authorization-server (from authorization_servers[0])
   - where the health endpoint and UI will be exposed
+
+ChatGPT connector note:
+  Create or verify the connector in ChatGPT settings only while tunnel-client is running.
+  Keep tunnel-client up for connector discovery and every MCP call from ChatGPT.
 
 Auth model to keep straight:
   - tunnel-client runtime uses CONTROL_PLANE_API_KEY / OPENAI_API_KEY

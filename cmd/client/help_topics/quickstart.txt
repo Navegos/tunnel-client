@@ -5,6 +5,12 @@ What tunnel-client is for:
   to the OpenAI control plane over an outbound tunnel. Once running, it exposes local
   operator surfaces at /healthz, /readyz, and /ui.
 
+Canonical setup URLs:
+  Tunnels management: https://platform.openai.com/settings/organization/tunnels
+  Runtime API keys: https://platform.openai.com/settings/organization/api-keys
+  Admin API keys: https://platform.openai.com/settings/organization/admin-keys
+  ChatGPT connector settings: https://chatgpt.com/#settings/Connectors
+
 If you only have the source checkout:
   make admin-ui
   go build -o bin/tunnel-client ./cmd/client
@@ -13,7 +19,10 @@ If you only have the source checkout:
 Pick the shortest matching starter sample:
 
 0. One-command demo path with the embedded MCP server:
-   tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id tunnel_...
+   tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id tunnel_... --health.listen-addr 127.0.0.1:0 --health.url-file /tmp/tunnel-client-health.url
+   After startup:
+   curl -fsS "$(cat /tmp/tunnel-client-health.url)/readyz"
+   open "$(cat /tmp/tunnel-client-health.url)/ui"
 
 1. Local stdio MCP command:
    tunnel-client init --sample sample_mcp_stdio_local --profile local-stdio --tunnel-id tunnel_... --mcp-command "python /path/to/server.py"
@@ -33,6 +42,10 @@ Pick the shortest matching starter sample:
 Then validate and start:
   tunnel-client doctor --profile <name> --explain
   tunnel-client run --profile <name>
+
+ChatGPT connector note:
+  Create or verify the connector in ChatGPT settings only while tunnel-client is running.
+  Keep tunnel-client up for connector discovery and every MCP call from ChatGPT.
 
 If you used the embedded demo MCP server and connected the tunnel in ChatGPT, try:
   - Use the server_info tool and summarize the demo MCP server.

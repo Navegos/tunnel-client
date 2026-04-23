@@ -37,8 +37,9 @@ func rootCommandLong() string {
 		"When it starts, it runs the long-lived tunnel daemon and exposes local operator surfaces at /healthz, /readyz, and /ui.",
 		`Fastest Codex terminal path: tunnel-client codex assistant "Summarize what tunnel-client is doing in this checkout."`,
 		"",
-		"Agent-first help topics:",
 	}
+	lines = append(lines, canonicalWebPropertyLines("Canonical setup URLs:")...)
+	lines = append(lines, "", "Agent-first help topics:")
 	for _, topic := range availableHelpTopics() {
 		lines = append(lines, fmt.Sprintf("  tunnel-client help %s", topic))
 	}

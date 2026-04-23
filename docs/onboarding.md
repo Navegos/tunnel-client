@@ -11,6 +11,13 @@ For the customer-shareable network model and request flow, see
 - A tunnel control-plane API key.
 - A provisioned `tunnel_id` for your environment.
 
+Use these exact setup pages when you need to create or inspect those values:
+
+- Tunnels management: `https://platform.openai.com/settings/organization/tunnels`
+- Runtime API keys: `https://platform.openai.com/settings/organization/api-keys`
+- Admin API keys: `https://platform.openai.com/settings/organization/admin-keys`
+- ChatGPT connector settings: `https://chatgpt.com/#settings/Connectors`
+
 ## 2) First-run paths
 
 If you already have a `tunnel-client` binary, start there. The CLI now embeds
@@ -24,7 +31,9 @@ tunnel-client help samples
 The recommended binary-first path is:
 
 ```bash
-tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id tunnel_0123456789abcdef0123456789abcdef
+tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id tunnel_0123456789abcdef0123456789abcdef --health.listen-addr 127.0.0.1:0 --health.url-file /tmp/tunnel-client-health.url
+curl -fsS "$(cat /tmp/tunnel-client-health.url)/readyz"
+open "$(cat /tmp/tunnel-client-health.url)/ui"
 ```
 
 If Codex is installed locally and you want the plugin surface instead of the raw
@@ -42,6 +51,12 @@ tunnel-client init --sample sample_mcp_stdio_local --profile local-stdio --tunne
 tunnel-client doctor --profile local-stdio --explain
 tunnel-client run --profile local-stdio
 ```
+
+If you still need the tunnel id or runtime/admin keys, open the matching setup
+URL above before running `init`. Create or verify the connector from the
+ChatGPT settings URL above only while `tunnel-client run ...` is healthy, and
+keep the daemon running for connector discovery and every MCP call from
+ChatGPT.
 
 Other fast starts:
 

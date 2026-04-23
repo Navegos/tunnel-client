@@ -95,6 +95,7 @@ func runDoctor(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) doctorR
 				"set --profile <name>, --config /path/to/config.yaml, or the matching environment variable",
 			},
 		})
+		checks = append(checks, doctorCanonicalWebPropertiesChecks()...)
 		return finalizeDoctorReport(checks, source)
 	}
 
@@ -119,6 +120,7 @@ func runDoctor(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) doctorR
 					fmt.Sprintf("ensure %s exists and is readable", source.Path),
 				},
 			})
+			checks = append(checks, doctorCanonicalWebPropertiesChecks()...)
 			return finalizeDoctorReport(checks, source)
 		}
 		checks = append(checks, doctorCheck{
@@ -137,6 +139,7 @@ func runDoctor(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) doctorR
 	cfg, err := config.LoadFromFlagSet(fs, lookupEnv)
 	if err != nil {
 		checks = append(checks, mapConfigErrorToDoctorCheck(err, source))
+		checks = append(checks, doctorCanonicalWebPropertiesChecks()...)
 		checks = append(checks, doctorCodexCheck(lookupEnv))
 		return finalizeDoctorReport(checks, source)
 	}
@@ -151,6 +154,7 @@ func runDoctor(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) doctorR
 		Status:  doctorStatusPass,
 		Summary: doctorAPIKeySummary(fs, lookupEnv),
 	})
+	checks = append(checks, doctorCanonicalWebPropertiesChecks()...)
 
 	mainBinding := cfg.MCP.MainChannelBinding()
 	if mainBinding != nil {
@@ -283,18 +287,22 @@ func mapConfigErrorToDoctorCheck(err error, source config.ConfigSource) doctorCh
 		check.ID = "tunnel_id"
 		check.Why = "tunnel-client cannot register or poll the control plane without a valid tunnel id."
 		check.Next = []string{
+			fmt.Sprintf("create or inspect the tunnel in %s", canonicalTunnelsManagementURL),
 			"run `tunnel-client admin tunnels get <tunnel_id>` if you already know the tunnel id; this read-only lookup works with the runtime key",
-			"run `tunnel-client admin tunnels create --help` or `tunnel-client admin tunnels list --help` if you need admin CRUD or discovery",
+			fmt.Sprintf("if you need admin CRUD or discovery, create or inspect an admin key in %s and then run `tunnel-client admin tunnels create --help` or `tunnel-client admin tunnels list --help`", canonicalAdminAPIKeysURL),
 			"once you have a tunnel id, create a first profile with `tunnel-client init --profile sample_mcp_with_dcr --tunnel-id tunnel_... --mcp-server-url http://127.0.0.1:3001/mcp`",
 			"or set --control-plane.tunnel-id or CONTROL_PLANE_TUNNEL_ID to a tunnel_<32 lowercase hex> value",
+			connectorSettingsRuntimeNote(doctorNextCommand(source)),
 			"for the full first-use flow run `tunnel-client help quickstart`",
 		}
 	case strings.Contains(message, "control plane API key") || strings.Contains(message, "CONTROL_PLANE_API_KEY") || strings.Contains(message, "OPENAI_API_KEY"):
 		check.ID = "control_plane_api_key"
 		check.Why = "tunnel-client cannot poll the control plane or complete tunnel registration without this key."
 		check.Next = []string{
+			fmt.Sprintf("create or inspect the runtime key in %s", canonicalRuntimeAPIKeysURL),
 			"export CONTROL_PLANE_API_KEY=...",
 			"if your tunnel key already lives in another environment variable, map it with `export CONTROL_PLANE_API_KEY=$YOUR_EXISTING_TUNNEL_KEY_ENV`",
+			fmt.Sprintf("if you also need admin CRUD, the admin-key page is %s", canonicalAdminAPIKeysURL),
 			"rerun: tunnel-client doctor",
 			"if it passes, run: " + doctorNextCommand(source),
 		}
@@ -315,6 +323,18 @@ func mapConfigErrorToDoctorCheck(err error, source config.ConfigSource) doctorCh
 		check.Next = []string{"rerun with --explain or inspect the selected profile/config file"}
 	}
 	return check
+}
+
+func doctorCanonicalWebPropertiesChecks() []doctorCheck {
+	checks := make([]doctorCheck, 0, len(canonicalWebProperties))
+	for _, property := range canonicalWebProperties {
+		checks = append(checks, doctorCheck{
+			ID:      property.CheckID,
+			Status:  doctorStatusPass,
+			Summary: property.URL,
+		})
+	}
+	return checks
 }
 
 func doctorAPIKeySummary(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) string {
