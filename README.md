@@ -17,37 +17,6 @@ network while OpenAI products use an OpenAI-hosted MCP tunnel URL.
 - **Development & testing**: [`docs/development.md`](docs/development.md)
 - **Roadmap / design notes**: [`docs/roadmap.md`](docs/roadmap.md)
 
-## For Codex / Claude / Copilot
-
-Binary-first flow:
-
-```bash
-tunnel-client help quickstart
-tunnel-client profiles samples list
-tunnel-client init --sample sample_mcp_stdio_local --profile local-stdio --tunnel-id tunnel_0123456789abcdef0123456789abcdef --mcp-command "python /path/to/server.py"
-tunnel-client doctor --profile local-stdio --explain
-tunnel-client run --profile local-stdio
-```
-
-Plugin flow for Codex:
-
-```bash
-tunnel-client plugin codex install
-tunnel-client help plugin
-tunnel-client plugin codex uninstall
-```
-
-Choose the raw binary when you want the smallest possible setup surface. Choose
-the plugin when you want Codex-native alias management, local process
-supervision, and reusable tunnel state.
-
-Starter prompts for Codex:
-
-- `Figure out what tunnel-client is for from the binary help, then get me to /ui with the shortest local path.`
-- `I only have the source checkout. Figure out how to build tunnel-client, then get me to /ui with the shortest local path.`
-- `Use tunnel-client to create or reuse a profile, run doctor --explain, and then start the daemon.`
-- `Install the Codex plugin from the tunnel-client binary, connect the provided tunnel id, and tell me whether the runtime is launched, healthy, or ready.`
-
 ## What it does
 
 - The client **long-polls** the OpenAI tunnel control plane over HTTPS:

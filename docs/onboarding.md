@@ -11,7 +11,7 @@ For the customer-shareable network model and request flow, see
 - A tunnel control-plane API key.
 - A provisioned `tunnel_id` for your environment.
 
-## 2) Build
+## 2) First-run paths
 
 If you already have a `tunnel-client` binary, start there. The CLI now embeds
 the shortest first-use path:
@@ -19,13 +19,20 @@ the shortest first-use path:
 ```bash
 tunnel-client help quickstart
 tunnel-client help samples
-tunnel-client help plugin
 ```
 
 The recommended binary-first path is:
 
 ```bash
 tunnel-client run --embedded-mcp-stub --control-plane.tunnel-id tunnel_0123456789abcdef0123456789abcdef
+```
+
+If Codex is installed locally and you want the plugin surface instead of the raw
+binary flow, install it directly from the binary:
+
+```bash
+tunnel-client plugin codex install
+tunnel-client plugin codex uninstall
 ```
 
 If you want a named profile instead of the one-command demo path:
@@ -48,19 +55,10 @@ Other fast starts:
 The embedded UI is served from the health listener. With the default
 `127.0.0.1:8080`, the UI is at `http://127.0.0.1:8080/ui`.
 
-If Codex is installed locally and you want the plugin surface instead of the raw
-binary flow, install it directly from the binary:
-
-```bash
-tunnel-client plugin codex install
-tunnel-client plugin codex uninstall
-```
-
 Starter prompts for Codex:
 
 - `Figure out what tunnel-client is for from the binary help, then get me to /ui with the shortest local path.`
 - `Use tunnel-client to create or reuse a profile, run doctor --explain, and then start the daemon.`
-- `Install the Codex plugin from the tunnel-client binary, connect the provided tunnel id, and tell me whether the runtime is launched, healthy, or ready.`
 
 ## 3) Build from source
 
@@ -70,9 +68,15 @@ From the `tunnel-client` module root:
 go build -o bin/tunnel-client ./cmd/client
 ```
 
-After building from source, use `./bin/tunnel-client` unless you add `bin/` to
-your `PATH`.
+Or from the monorepo root:
 
+```bash
+bazel build //api/tunnel-client/cmd/client:client
+./bazel-bin/api/tunnel-client/cmd/client/client
+```
+
+After building from source, use `./bin/tunnel-client` or the Bazel output path
+unless you add that location to your `PATH`.
 ## 4) Configure
 
 At minimum, you must set:
