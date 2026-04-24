@@ -259,6 +259,7 @@ func printCodexStatus(w io.Writer, report codexStatusReport) {
 		}
 	} else if report.PluginDir != "" {
 		_, _ = fmt.Fprintf(w, "Plugin on disk: not installed (%s)\n", report.PluginDir)
+		_, _ = fmt.Fprintln(w, "Note: Bridge and Assistant readiness reflect Codex itself, not plugin files on disk. If you just uninstalled tunnel-mcp, already-running Codex sessions may still have the previously loaded plugin until restart.")
 	}
 	_, _ = fmt.Fprintf(w, "Install: %s\n", report.RecommendedInstallCommand)
 	_, _ = fmt.Fprintf(w, "Upgrade: %s\n", report.RecommendedUpgradeCommand)

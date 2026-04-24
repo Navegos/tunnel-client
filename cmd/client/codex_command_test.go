@@ -137,6 +137,22 @@ func TestCodexStatusTextLabelsPluginStateAsOnDisk(t *testing.T) {
 	require.NotContains(t, stdout, "Plugin: installed")
 }
 
+func TestCodexStatusTextClarifiesReadyCodexWithMissingOnDiskPlugin(t *testing.T) {
+	codexHome := t.TempDir()
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"CODEX_HOME": codexHome,
+		"HOME":       t.TempDir(),
+	}, "codex", "status")
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "Plugin on disk: not installed ("+codexplugin.PluginTargetDir(codexHome)+")")
+	require.Contains(t, stdout, "Note: Bridge and Assistant readiness reflect Codex itself, not plugin files on disk.")
+}
+
 func TestCodexStatusJSONReportsBridgeReadyWhenAssistantProbeStalls(t *testing.T) {
 	originalTimeout := codexStatusAssistantProbeTimeout
 	codexStatusAssistantProbeTimeout = 50 * time.Millisecond
@@ -356,7 +372,7 @@ func TestCodexAssistantInjectsBundledBinaryAcquisitionGuidance(t *testing.T) {
 	require.NotEmpty(t, found)
 	require.Contains(t, found, "plugins/tunnel-mcp/skills/tunnel-mcp/references/binary.md")
 	require.Contains(t, found, "https://github.com/openai/tunnel-client/releases/latest")
-	require.Contains(t, found, "git clone https://github.com/openai/tunnel-client.git")
+	require.Contains(t, found, "https://github.com/openai/tunnel-client")
 	require.NotContains(t, found, prompt)
 }
 

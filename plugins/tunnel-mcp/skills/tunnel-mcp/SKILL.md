@@ -28,6 +28,9 @@ Binary setup order:
 - first try the existing binary discovery path:
   `--tunnel-client-bin`, `TUNNEL_CLIENT_BIN`, the installed bundle hint,
   adjacent build outputs, then `PATH`
+- when the plugin is already installed, prefer `scripts/tunnel_mcp ...` and the
+  installed `.tunnel-client-bin` hint over `command -v tunnel-client`; ambient
+  `PATH` can point at a different binary than the installed plugin bundle
 - if the binary is missing, consult `references/binary.md`
 - do not auto-download, auto-clone, or execute remote binaries just because the
   plugin cannot find `tunnel-client`

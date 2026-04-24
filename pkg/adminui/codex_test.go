@@ -110,7 +110,7 @@ func TestBuildCodexKnowledgeItemUsesBundledBinaryGuidance(t *testing.T) {
 		"Curated tunnel-mcp plugin references injected from the binary.",
 		"plugins/tunnel-mcp/skills/tunnel-mcp/references/binary.md",
 		"https://github.com/openai/tunnel-client/releases/latest",
-		"git clone https://github.com/openai/tunnel-client.git",
+		"https://github.com/openai/tunnel-client",
 	} {
 		if !strings.Contains(text, snippet) {
 			t.Fatalf("expected knowledge text to contain %q, got:\n%s", snippet, text)

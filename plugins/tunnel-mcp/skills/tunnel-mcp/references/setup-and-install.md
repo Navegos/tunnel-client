@@ -12,6 +12,9 @@ you need to inspect the plugin contents first:
 - `tunnel-client codex plugin export --dir /tmp/tunnel-mcp`
 - `cd /tmp/tunnel-mcp && python3 scripts/install_plugin.py --tunnel-client-bin /path/to/tunnel-client`
 
+After install, prefer the installed plugin router and persisted
+`.tunnel-client-bin` hint over an ambient `tunnel-client` found on `PATH`.
+
 The plugin is a thin router. It does not own protocol logic. After install,
 use the native CLI for runtime operations:
 

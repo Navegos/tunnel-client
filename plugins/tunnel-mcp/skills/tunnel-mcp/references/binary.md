@@ -8,6 +8,10 @@ First try existing binary discovery:
 - adjacent local build outputs
 - `PATH`
 
+If the plugin is already installed, prefer the installed router and
+`.tunnel-client-bin` hint before trusting `command -v tunnel-client`. `PATH`
+may point at a different binary than the plugin bundle was installed with.
+
 If `tunnel-client` is still missing, use one of these public-safe setup paths:
 
 - latest releases: `https://github.com/openai/tunnel-client/releases/latest`

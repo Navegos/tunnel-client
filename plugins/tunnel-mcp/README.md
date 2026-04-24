@@ -132,6 +132,8 @@ Runtime prerequisites:
 - a `tunnel-client` binary discoverable in this order:
   `--tunnel-client-bin`, `TUNNEL_CLIENT_BIN`, an installed bundle hint,
   adjacent source/build outputs, then `PATH`
+- once the plugin is installed, prefer the installed router and persisted
+  `.tunnel-client-bin` hint over an ambient `tunnel-client` on `PATH`
 - executable naming:
   - macOS/Linux: `tunnel-client`
   - Windows: `tunnel-client.exe`
