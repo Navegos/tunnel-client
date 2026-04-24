@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -54,6 +55,9 @@ var (
 )
 
 func BuildPromptContext(prompt string) string {
+	if text := buildMissingBinaryPromptContext(prompt); text != "" {
+		return text
+	}
 	matches := Search(prompt, 3)
 	return FormatPromptContext([]string{
 		"Packaged tunnel-client knowledge base injected from the binary.",
@@ -83,6 +87,71 @@ func FormatPromptContext(intro []string, matchPrefix string, matches []Match) st
 		)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func buildMissingBinaryPromptContext(prompt string) string {
+	return buildMissingBinaryPromptContextForOS(prompt, runtime.GOOS)
+}
+
+func buildMissingBinaryPromptContextForOS(prompt string, goos string) string {
+	if !isMissingBinaryPrompt(prompt) {
+		return ""
+	}
+	buildCommand, wrapperCommand, binaryFlag := BinaryAcquisitionGuidanceForOS(goos)
+	lines := []string{
+		"Deterministic tunnel-client binary-missing guidance injected from the binary.",
+		"This path is intentionally not retrieval-based because missing-binary prompts must stay public-safe and binary-first.",
+		"Use these exact public-safe anchors in the answer:",
+		"https://github.com/openai/tunnel-client/releases/latest",
+		"https://github.com/openai/tunnel-client",
+		"git clone https://github.com/openai/tunnel-client.git",
+		buildCommand,
+		"After the binary exists, install or refresh the plugin with:",
+		"tunnel-client codex plugin install",
+		"If the user is working from an exported plugin bundle or source checkout, the wrapper-first fallback command for this OS is:",
+		wrapperCommand,
+		"You can also point the plugin at the binary directly with:",
+		"TUNNEL_CLIENT_BIN",
+		binaryFlag,
+		"Do not suggest internal-only installer or checkout-specific commands for generic missing-binary guidance.",
+	}
+	return strings.Join(lines, "\n")
+}
+
+func BinaryAcquisitionGuidanceForOS(goos string) (buildCommand string, wrapperCommand string, binaryFlag string) {
+	switch goos {
+	case "windows":
+		return "go build -o bin/tunnel-client.exe ./cmd/client",
+			`powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Install-Plugin.ps1 --tunnel-client-bin C:\\path\\to\\tunnel-client.exe`,
+			`--tunnel-client-bin C:\\path\\to\\tunnel-client.exe`
+	default:
+		return "go build -o bin/tunnel-client ./cmd/client",
+			"sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client",
+			"--tunnel-client-bin /path/to/tunnel-client"
+	}
+}
+
+func isMissingBinaryPrompt(prompt string) bool {
+	lower := strings.ToLower(strings.TrimSpace(prompt))
+	if lower == "" {
+		return false
+	}
+	if !containsKnowledgeAny(lower, "tunnel-client", "tunnel client", "tunnel-mcp", "tunnel mcp") {
+		return false
+	}
+	if !containsKnowledgeAny(lower, "missing", "not found", "can't find", "cannot find", "could not find", "not installed", "download", "install") {
+		return false
+	}
+	return containsKnowledgeAny(lower, "binary", "executable", "plugin", "path", "on path", "command -v")
+}
+
+func containsKnowledgeAny(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func Search(prompt string, limit int) []Match {

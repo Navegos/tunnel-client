@@ -40,7 +40,14 @@ Install that exported bundle from the export directory itself:
 
 ```bash
 cd /tmp/tunnel-mcp
-python3 scripts/install_plugin.py --tunnel-client-bin /path/to/tunnel-client
+sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client
+```
+
+Windows PowerShell:
+
+```powershell
+Set-Location C:\tmp\tunnel-mcp
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe
 ```
 
 If you do not already have a `tunnel-client` binary, use one of these
@@ -78,29 +85,35 @@ or a standalone `tunnel-client` checkout.
 
 Prerequisites:
 
-- `python3` (Python 3.9+)
+- macOS/Linux shell or Windows PowerShell
+- a `tunnel-client` binary available via `--tunnel-client-bin`, `TUNNEL_CLIENT_BIN`, adjacent build outputs, or `PATH`
 - a Codex config directory, normally `~/.codex`
 
 From a `tunnel-client` module root:
 
 ```bash
-python3 plugins/tunnel-mcp/scripts/install_plugin.py
+./plugins/tunnel-mcp/scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client
 ```
 
-To install into a non-default Codex config directory, add
-`--codex-home /path/to/codex-home`. The local installer also accepts
-`--source /path/to/plugin` and `--tunnel-client-bin /path/to/tunnel-client`.
-When possible it also persists a matching `tunnel-client` binary hint into the
-installed plugin bundle so Codex can use the plugin from an empty working
-directory without separately setting `TUNNEL_CLIENT_BIN`.
+From Windows PowerShell in a `tunnel-client` module root:
+
+```powershell
+.\plugins\tunnel-mcp\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe
+```
+
+To install into a non-default Codex config directory, add `--codex-home /path/to/codex-home`.
+The wrapper scripts locate the requested `tunnel-client` binary and delegate to
+`tunnel-client codex plugin install`, so the installed bundle matches the
+selected binary. When possible the binary install path also persists a matching
+`.tunnel-client-bin` hint into the installed plugin bundle so Codex can use the
+plugin from an empty working directory without separately setting
+`TUNNEL_CLIENT_BIN`.
 
 The installer should print output like:
 
 ```text
-Installed tunnel-mcp@debug
-Target: /Users/you/.codex/plugins/cache/debug/tunnel-mcp/local
-Config: /Users/you/.codex/config.toml
-Tunnel client: /Users/you/code/tunnel-client/bin/tunnel-client
+Installed tunnel-mcp into /Users/you/.codex/plugins/cache/debug/tunnel-mcp/local
+Updated Codex config /Users/you/.codex/config.toml
 ```
 
 Verify the install:
@@ -137,6 +150,7 @@ Runtime prerequisites:
 - executable naming:
   - macOS/Linux: `tunnel-client`
   - Windows: `tunnel-client.exe`
+- the public install path does not require Python
 - cross-platform router entrypoints:
   - macOS/Linux: `scripts/tunnel_mcp`
   - Windows: `scripts\\tunnel_mcp.cmd` or `powershell -File scripts\\tunnel_mcp.ps1`
@@ -147,7 +161,13 @@ Upgrade the plugin by rerunning the same install command with the newer plugin
 source:
 
 ```bash
-python3 plugins/tunnel-mcp/scripts/install_plugin.py
+./plugins/tunnel-mcp/scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client
+```
+
+Windows PowerShell:
+
+```powershell
+.\plugins\tunnel-mcp\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe
 ```
 
 The installer replaces the cached plugin copy at

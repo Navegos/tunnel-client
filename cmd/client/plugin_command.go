@@ -94,7 +94,8 @@ func newCodexPluginExportCommand(stdout io.Writer, stderr io.Writer) *cobra.Comm
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Exported embedded Codex plugin bundle to %s\n", dir)
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Next:")
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  cd %s && python3 scripts/install_plugin.py --tunnel-client-bin /path/to/tunnel-client\n", dir)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  macOS/Linux: cd %s && sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client\n", dir)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Windows PowerShell: Set-Location %s; powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Install-Plugin.ps1 --tunnel-client-bin C:\\path\\to\\tunnel-client.exe\n", dir)
 			return nil
 		},
 	}

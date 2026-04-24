@@ -8,6 +8,9 @@
 - Do not introduce private repository layout, internal package-manager,
   mirror-pipeline, or private source-tree references in plugin code, docs,
   prompts, examples, or runtime output.
+- Keep binary-owned install/uninstall paths primary, and use POSIX shell or
+  PowerShell wrapper examples for exported/source-checkout fallback flows. Do
+  not surface `python3 scripts/install_plugin.py` as the main public path.
 - Document upgrade as rerunning the installer against the newer plugin source.
   The installer should replace only
   `$CODEX_HOME/plugins/cache/<marketplace>/tunnel-mcp/local` and keep runtime

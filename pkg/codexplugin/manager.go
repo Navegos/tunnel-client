@@ -262,6 +262,9 @@ func (m *Manager) Create(opts CreateOptions) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateCreateOrConnectScope("create", opts.OrganizationIDs, opts.WorkspaceIDs); err != nil {
+		return nil, err
+	}
 	root := pluginstate.ResolveRoot(m.lookupEnv)
 	if err := pluginstate.EnsureDirs(root); err != nil {
 		return nil, err
@@ -310,6 +313,9 @@ func (m *Manager) Create(opts CreateOptions) (map[string]any, error) {
 func (m *Manager) Connect(opts ConnectOptions) (map[string]any, error) {
 	alias, err := pluginstate.NormalizeAlias(opts.Alias)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateCreateOrConnectScope("connect", opts.OrganizationIDs, opts.WorkspaceIDs); err != nil {
 		return nil, err
 	}
 	root := pluginstate.ResolveRoot(m.lookupEnv)
@@ -823,6 +829,9 @@ func (m *Manager) remoteList(opts ListOptions, adminProfile effectiveAdminProfil
 }
 
 func (m *Manager) remoteListForLookup(organizationIDs, workspaceIDs []string, tenantID string, adminProfile effectiveAdminProfile) ([]adminapi.Tunnel, error) {
+	if err := validateListScope(organizationIDs, workspaceIDs, tenantID); err != nil {
+		return nil, err
+	}
 	client, err := m.newAdminClient(adminProfile, adminProfile.AdminKey)
 	if err != nil {
 		return nil, err
@@ -878,7 +887,6 @@ func (m *Manager) connectPayload(root pluginstate.Root, alias string, tunnel adm
 		"mode":               launch.Mode,
 		"command":            launch.Command,
 		"session_name":       launch.SessionName,
-		"pid":                launch.PID,
 		"log_path":           launch.LogPath,
 		"started":            launch.Started,
 		"running":            launch.Running,
@@ -889,6 +897,9 @@ func (m *Manager) connectPayload(root pluginstate.Root, alias string, tunnel adm
 		"process":            processToMap(process),
 		"local":              local,
 		"next_steps":         []string{doctorCommand(record.ProfileName, record.ProfileDir, record.ConfigPath, true)},
+	}
+	if launch.PID > 0 {
+		payload["pid"] = launch.PID
 	}
 	if launch.ExitCode != nil {
 		payload["exit_code"] = *launch.ExitCode
@@ -972,6 +983,10 @@ func (m *Manager) localRuntimeDetails(root pluginstate.Root, alias string, recor
 	tmuxRunning, _ := session.TmuxHasSessionName(m.runtime, tmuxSession)
 	processRunning := process.PID > 0 && session.PIDIsRunning(process.PID)
 	runtimeRunning := tmuxRunning || processRunning
+	reportedProcessRunning := processRunning
+	if process.Mode == "tmux" && tmuxRunning {
+		reportedProcessRunning = true
+	}
 	return map[string]any{
 		"runtime_state": runtimeState(runtimeRunning, probe),
 		"issues": localIssues(
@@ -989,7 +1004,7 @@ func (m *Manager) localRuntimeDetails(root pluginstate.Root, alias string, recor
 			"session_name": tmuxSession,
 			"running":      tmuxRunning,
 		},
-		"process_running": processRunning,
+		"process_running": reportedProcessRunning,
 	}
 }
 
@@ -1247,13 +1262,12 @@ func aliasToMap(record pluginstate.AliasRecord) map[string]any {
 }
 
 func processToMap(record pluginstate.ProcessRecord) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"alias":           record.Alias,
 		"tunnel_id":       record.TunnelID,
 		"admin_profile":   record.AdminProfile,
 		"mode":            record.Mode,
 		"session_name":    record.SessionName,
-		"pid":             record.PID,
 		"config_path":     record.ConfigPath,
 		"profile_name":    record.ProfileName,
 		"profile_dir":     record.ProfileDir,
@@ -1265,6 +1279,10 @@ func processToMap(record pluginstate.ProcessRecord) map[string]any {
 		"log_path":        record.LogPath,
 		"started_at":      record.StartedAt,
 	}
+	if record.PID > 0 {
+		payload["pid"] = record.PID
+	}
+	return payload
 }
 
 func endpointToMap(probe session.EndpointProbe) map[string]any {
@@ -1367,6 +1385,36 @@ func localIssues(process pluginstate.ProcessRecord, tmuxRunning bool, processRun
 
 func hasRemoteScope(organizationIDs, workspaceIDs []string, tenantID string) bool {
 	return len(organizationIDs) > 0 || len(workspaceIDs) > 0 || strings.TrimSpace(tenantID) != ""
+}
+
+func validateCreateOrConnectScope(action string, organizationIDs, workspaceIDs []string) error {
+	if len(organizationIDs) > 0 && len(workspaceIDs) > 0 {
+		return fmt.Errorf("runtimes %s accepts exactly one remote scope family: --organization-id or --workspace-id", action)
+	}
+	return nil
+}
+
+func validateListScope(organizationIDs, workspaceIDs []string, tenantID string) error {
+	filterCount := 0
+	if len(organizationIDs) > 0 {
+		filterCount++
+	}
+	if len(workspaceIDs) > 0 {
+		filterCount++
+	}
+	if strings.TrimSpace(tenantID) != "" {
+		filterCount++
+	}
+	if filterCount > 1 {
+		return errors.New("runtimes list accepts exactly one remote scope family: --organization-id, --workspace-id, or --tenant-id")
+	}
+	if len(organizationIDs) > 1 {
+		return errors.New("runtimes list accepts at most one --organization-id for remote listing")
+	}
+	if len(workspaceIDs) > 1 {
+		return errors.New("runtimes list accepts at most one --workspace-id for remote listing")
+	}
+	return nil
 }
 
 func providedTunnel(alias string, opts ConnectOptions) *adminapi.Tunnel {

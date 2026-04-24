@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-//go:embed tunnel-mcp/.codex-plugin/plugin.json tunnel-mcp/README.md tunnel-mcp/AGENTS.md tunnel-mcp/scripts/install_plugin.py tunnel-mcp/scripts/tunnel_mcp tunnel-mcp/scripts/tunnel_mcp.cmd tunnel-mcp/scripts/tunnel_mcp.ps1 tunnel-mcp/skills/tunnel-mcp/SKILL.md tunnel-mcp/skills/tunnel-mcp/references/*.md
+//go:embed tunnel-mcp/.codex-plugin/plugin.json tunnel-mcp/README.md tunnel-mcp/AGENTS.md tunnel-mcp/scripts/install_plugin.py tunnel-mcp/scripts/install_plugin.sh tunnel-mcp/scripts/Install-Plugin.ps1 tunnel-mcp/scripts/tunnel_mcp tunnel-mcp/scripts/tunnel_mcp.cmd tunnel-mcp/scripts/tunnel_mcp.ps1 tunnel-mcp/skills/tunnel-mcp/SKILL.md tunnel-mcp/skills/tunnel-mcp/references/*.md
 var embeddedPluginFiles embed.FS
 
 var tunnelMCPPluginFiles = []string{
@@ -20,6 +20,8 @@ var tunnelMCPPluginFiles = []string{
 	"tunnel-mcp/README.md",
 	"tunnel-mcp/AGENTS.md",
 	"tunnel-mcp/scripts/install_plugin.py",
+	"tunnel-mcp/scripts/install_plugin.sh",
+	"tunnel-mcp/scripts/Install-Plugin.ps1",
 	"tunnel-mcp/scripts/tunnel_mcp",
 	"tunnel-mcp/scripts/tunnel_mcp.cmd",
 	"tunnel-mcp/scripts/tunnel_mcp.ps1",
@@ -82,6 +84,8 @@ func TunnelMCPExportToDir(dir string) error {
 		mode := fs.FileMode(0o644)
 		if slices.Contains([]string{
 			"tunnel-mcp/scripts/install_plugin.py",
+			"tunnel-mcp/scripts/install_plugin.sh",
+			"tunnel-mcp/scripts/Install-Plugin.ps1",
 			"tunnel-mcp/scripts/tunnel_mcp",
 			"tunnel-mcp/scripts/tunnel_mcp.cmd",
 			"tunnel-mcp/scripts/tunnel_mcp.ps1",

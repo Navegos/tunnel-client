@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,30 @@ func TestEmbeddedHelpTopicsLoad(t *testing.T) {
 		require.True(t, ok, topic)
 		require.NotEmpty(t, body, topic)
 	}
+}
+
+func TestHelpTopicPluginUsesCurrentOSInstallGuidance(t *testing.T) {
+	t.Parallel()
+
+	body, ok := loadHelpTopic("plugin")
+	require.True(t, ok)
+	if runtime.GOOS == "windows" {
+		require.Contains(t, body, `Windows PowerShell: Set-Location C:\tmp\tunnel-plugin; powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe`)
+		require.NotContains(t, body, "macOS/Linux: cd /tmp/tunnel-plugin && sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client")
+	} else {
+		require.Contains(t, body, "macOS/Linux: cd /tmp/tunnel-plugin && sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client")
+		require.NotContains(t, body, `Windows PowerShell: Set-Location C:\tmp\tunnel-plugin; powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe`)
+	}
+}
+
+func TestRenderHelpTopicForOSSwitchesBundleInstallCommand(t *testing.T) {
+	t.Parallel()
+
+	body := renderHelpTopicForOS(pluginBundleInstallCommandPlaceholder, "windows")
+	require.Equal(t, `  Windows PowerShell: Set-Location C:\tmp\tunnel-plugin; powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe`, body)
+
+	body = renderHelpTopicForOS(pluginBundleInstallCommandPlaceholder, "darwin")
+	require.Equal(t, "  macOS/Linux: cd /tmp/tunnel-plugin && sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client", body)
 }
 
 func TestInitWritesValidatedProfile(t *testing.T) {
@@ -243,7 +268,9 @@ func TestPluginCodexInstallExportAndUninstallCommands(t *testing.T) {
 	pluginDir := codexplugin.PluginTargetDir(codexHome)
 	require.FileExists(t, filepath.Join(pluginDir, ".codex-plugin", "plugin.json"))
 	require.FileExists(t, filepath.Join(pluginDir, ".tunnel-client-bin"))
+	require.FileExists(t, filepath.Join(pluginDir, "scripts", "Install-Plugin.ps1"))
 	require.FileExists(t, filepath.Join(pluginDir, "scripts", "install_plugin.py"))
+	require.FileExists(t, filepath.Join(pluginDir, "scripts", "install_plugin.sh"))
 	require.FileExists(t, filepath.Join(codexHome, "config.toml"))
 	require.Contains(t, stdout, "Installed tunnel-mcp")
 	require.Contains(t, stdout, "tunnel-client codex assistant")
@@ -256,11 +283,14 @@ func TestPluginCodexInstallExportAndUninstallCommands(t *testing.T) {
 	}, "plugin", "codex", "export", "--dir", exportDir)
 
 	require.NoError(t, err, stderr)
+	require.FileExists(t, filepath.Join(exportDir, "scripts", "Install-Plugin.ps1"))
 	require.FileExists(t, filepath.Join(exportDir, "scripts", "install_plugin.py"))
+	require.FileExists(t, filepath.Join(exportDir, "scripts", "install_plugin.sh"))
 	require.FileExists(t, filepath.Join(exportDir, ".codex-plugin", "plugin.json"))
 	require.NoFileExists(t, filepath.Join(exportDir, ".tunnel-client-bin"))
 	require.Contains(t, stdout, "Exported embedded Codex plugin bundle")
-	require.Contains(t, stdout, "python3 scripts/install_plugin.py --tunnel-client-bin /path/to/tunnel-client")
+	require.Contains(t, stdout, "sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client")
+	require.Contains(t, stdout, `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe`)
 
 	stdout, stderr, err = executeCommand(t, map[string]string{
 		"HOME": t.TempDir(),

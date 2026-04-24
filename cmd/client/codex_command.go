@@ -209,37 +209,58 @@ func inspectCodexStatus(lookupEnv func(string) (string, bool)) codexStatusReport
 }
 
 func printCodexStatus(w io.Writer, report codexStatusReport) {
-	_, _ = fmt.Fprintf(w, "Codex state: %s\n", report.State)
-	if report.Path != "" {
-		_, _ = fmt.Fprintf(w, "Path: %s\n", report.Path)
-	}
-	if report.Version != "" {
-		_, _ = fmt.Fprintf(w, "Version: %s\n", report.Version)
-	}
+	printStatusSection(w, "Codex", []string{
+		fmt.Sprintf("State: %s", report.State),
+		optionalStatusLine("Path", report.Path),
+		optionalStatusLine("Version", report.Version),
+	})
 	if !report.Detected {
-		_, _ = fmt.Fprintf(w, "Install: %s\n", report.RecommendedInstallCommand)
-		_, _ = fmt.Fprintf(w, "Docs: %s\n", report.DocsURL)
+		_, _ = fmt.Fprintln(w)
+		printStatusSection(w, "Commands", []string{
+			fmt.Sprintf("Install: %s", report.RecommendedInstallCommand),
+			fmt.Sprintf("Docs: %s", report.DocsURL),
+		})
 		return
 	}
-	if report.AppServerSupported {
-		_, _ = fmt.Fprintln(w, "app-server: supported")
+	_, _ = fmt.Fprintln(w)
+	pluginLines := []string{}
+	if report.PluginInstalled {
+		pluginLines = append(pluginLines,
+			"Status: installed",
+			optionalStatusLine("Dir", report.PluginDir),
+			optionalStatusLine("Binary hint", report.PluginBinaryHint),
+		)
+		if report.PluginMatchesCurrentBinary != nil {
+			pluginLines = append(pluginLines, fmt.Sprintf("Matches current tunnel-client: %t", *report.PluginMatchesCurrentBinary))
+		}
 	} else {
-		_, _ = fmt.Fprintf(w, "app-server: unavailable (%s)\n", valueOrDash(report.AppServerSupportError))
+		pluginLines = append(pluginLines, "Status: not installed")
+		if report.PluginDir != "" {
+			pluginLines = append(pluginLines, fmt.Sprintf("Expected dir: %s", report.PluginDir))
+		}
+	}
+	printStatusSection(w, "Tunnel MCP plugin", pluginLines)
+	_, _ = fmt.Fprintln(w)
+	appLines := []string{}
+	if report.AppServerSupported {
+		appLines = append(appLines, "app-server: supported")
+	} else {
+		appLines = append(appLines, fmt.Sprintf("app-server: unavailable (%s)", valueOrDash(report.AppServerSupportError)))
 	}
 	if report.BridgeError != "" {
-		_, _ = fmt.Fprintf(w, "Bridge error: %s\n", report.BridgeError)
+		appLines = append(appLines, fmt.Sprintf("Bridge error: %s", report.BridgeError))
 	}
 	if report.BridgeReady {
-		_, _ = fmt.Fprintln(w, "Bridge: ready")
+		appLines = append(appLines, "Bridge: ready")
 	}
 	if report.AssistantState != "" {
-		_, _ = fmt.Fprintf(w, "Assistant readiness: %s\n", report.AssistantState)
+		appLines = append(appLines, fmt.Sprintf("Assistant readiness: %s", report.AssistantState))
 	}
 	if report.AssistantError != "" {
-		_, _ = fmt.Fprintf(w, "Assistant error: %s\n", report.AssistantError)
+		appLines = append(appLines, fmt.Sprintf("Assistant error: %s", report.AssistantError))
 	}
 	if report.AppServerSupported {
-		_, _ = fmt.Fprintln(w, "Assistant: tunnel-client codex assistant")
+		appLines = append(appLines, "Assistant: tunnel-client codex assistant")
 	}
 	if report.Snapshot != nil && report.Snapshot.Account != nil {
 		account := report.Snapshot.Account
@@ -247,24 +268,36 @@ func printCodexStatus(w io.Writer, report codexStatusReport) {
 		if strings.TrimSpace(account.PlanType) != "" {
 			label += " (" + account.PlanType + ")"
 		}
-		_, _ = fmt.Fprintf(w, "Account: %s\n", label)
+		appLines = append(appLines, fmt.Sprintf("Account: %s", label))
 	}
-	if report.PluginInstalled {
-		_, _ = fmt.Fprintf(w, "Plugin on disk: installed in %s\n", report.PluginDir)
-		if report.PluginBinaryHint != "" {
-			_, _ = fmt.Fprintf(w, "Plugin binary hint: %s\n", report.PluginBinaryHint)
-		}
-		if report.PluginMatchesCurrentBinary != nil {
-			_, _ = fmt.Fprintf(w, "Plugin matches current tunnel-client: %t\n", *report.PluginMatchesCurrentBinary)
-		}
-	} else if report.PluginDir != "" {
-		_, _ = fmt.Fprintf(w, "Plugin on disk: not installed (%s)\n", report.PluginDir)
-		_, _ = fmt.Fprintln(w, "Note: Bridge and Assistant readiness reflect Codex itself, not plugin files on disk. If you just uninstalled tunnel-mcp, already-running Codex sessions may still have the previously loaded plugin until restart.")
+	if !report.PluginInstalled {
+		appLines = append(appLines, "Note: Bridge and Assistant readiness reflect Codex itself, not plugin files on disk. If you just uninstalled tunnel-mcp, already-running Codex sessions may still have the previously loaded plugin until restart.")
 	}
-	_, _ = fmt.Fprintf(w, "Install: %s\n", report.RecommendedInstallCommand)
-	_, _ = fmt.Fprintf(w, "Upgrade: %s\n", report.RecommendedUpgradeCommand)
-	_, _ = fmt.Fprintf(w, "Uninstall: %s\n", report.RecommendedUninstallCommand)
-	_, _ = fmt.Fprintf(w, "Docs: %s\n", report.DocsURL)
+	printStatusSection(w, "Codex app / bridge", appLines)
+	_, _ = fmt.Fprintln(w)
+	printStatusSection(w, "Commands", []string{
+		fmt.Sprintf("Install: %s", report.RecommendedInstallCommand),
+		fmt.Sprintf("Upgrade: %s", report.RecommendedUpgradeCommand),
+		fmt.Sprintf("Uninstall: %s", report.RecommendedUninstallCommand),
+		fmt.Sprintf("Docs: %s", report.DocsURL),
+	})
+}
+
+func printStatusSection(w io.Writer, heading string, lines []string) {
+	_, _ = fmt.Fprintf(w, "%s:\n", heading)
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		_, _ = fmt.Fprintf(w, "  %s\n", line)
+	}
+}
+
+func optionalStatusLine(label string, value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s", label, value)
 }
 
 func probeCodexAssistantReady(bridge *codexappserver.Bridge) error {

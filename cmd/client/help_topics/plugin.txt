@@ -21,7 +21,7 @@ To remove or reset the installed plugin bundle:
 
 If you want to inspect the bundle first:
   tunnel-client codex plugin export --dir /tmp/tunnel-plugin
-  cd /tmp/tunnel-plugin && python3 scripts/install_plugin.py --tunnel-client-bin /path/to/tunnel-client
+{{PLUGIN_BUNDLE_INSTALL_COMMAND}}
 
 If Codex is installed locally but the plugin is missing, doctor and startup guidance will point you back to:
   tunnel-client codex plugin install

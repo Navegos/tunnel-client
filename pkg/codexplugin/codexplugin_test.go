@@ -19,7 +19,9 @@ func TestInstallExportsPluginAndUpdatesConfig(t *testing.T) {
 
 	require.True(t, detection.PluginInstalled)
 	require.FileExists(t, filepath.Join(detection.PluginDir, ".codex-plugin", "plugin.json"))
+	require.FileExists(t, filepath.Join(detection.PluginDir, "scripts", "Install-Plugin.ps1"))
 	require.FileExists(t, filepath.Join(detection.PluginDir, "scripts", "install_plugin.py"))
+	require.FileExists(t, filepath.Join(detection.PluginDir, "scripts", "install_plugin.sh"))
 	require.FileExists(t, filepath.Join(detection.PluginDir, "scripts", "tunnel_mcp"))
 	require.FileExists(t, filepath.Join(detection.PluginDir, ".tunnel-client-bin"))
 
@@ -39,6 +41,8 @@ func TestExportWritesBinaryHintWhenProvided(t *testing.T) {
 	err := Export(exportDir, tunnelClientBin)
 	require.NoError(t, err)
 
+	require.FileExists(t, filepath.Join(exportDir, "scripts", "Install-Plugin.ps1"))
+	require.FileExists(t, filepath.Join(exportDir, "scripts", "install_plugin.sh"))
 	data, err := os.ReadFile(filepath.Join(exportDir, ".tunnel-client-bin"))
 	require.NoError(t, err)
 	require.Equal(t, tunnelClientBin+"\n", string(data))

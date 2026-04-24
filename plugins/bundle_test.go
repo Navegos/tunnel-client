@@ -3,8 +3,11 @@ package pluginsbundle
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	assistantkb "go.openai.org/api/tunnel-client/docs"
 )
 
 func TestValidatePluginSegment(t *testing.T) {
@@ -29,11 +32,18 @@ func TestBuildTunnelMCPPromptContextSelectsSetupReference(t *testing.T) {
 	t.Parallel()
 
 	text := BuildTunnelMCPPromptContext("How do I install the codex plugin from the tunnel-client binary?")
+	_, wrapperCommand, _ := assistantkb.BinaryAcquisitionGuidanceForOS(runtime.GOOS)
 	if !strings.Contains(text, "plugins/tunnel-mcp/skills/tunnel-mcp/references/setup-and-install.md") {
 		t.Fatalf("expected setup reference in prompt context, got:\n%s", text)
 	}
 	if !strings.Contains(text, "tunnel-client codex plugin install") {
 		t.Fatalf("expected setup excerpt in prompt context, got:\n%s", text)
+	}
+	if !strings.Contains(text, wrapperCommand) {
+		t.Fatalf("expected OS-specific wrapper guidance in prompt context, got:\n%s", text)
+	}
+	if strings.Contains(text, "python3 scripts/install_plugin.py") {
+		t.Fatalf("expected setup guidance to omit python installer, got:\n%s", text)
 	}
 }
 
@@ -41,6 +51,7 @@ func TestBuildTunnelMCPPromptContextSelectsBinaryReference(t *testing.T) {
 	t.Parallel()
 
 	text := BuildTunnelMCPPromptContext("tunnel-client was not found, how do I get a binary?")
+	buildCommand, wrapperCommand, binaryFlag := assistantkb.BinaryAcquisitionGuidanceForOS(runtime.GOOS)
 	if !strings.Contains(text, "plugins/tunnel-mcp/skills/tunnel-mcp/references/binary.md") {
 		t.Fatalf("expected binary reference in prompt context, got:\n%s", text)
 	}
@@ -50,15 +61,46 @@ func TestBuildTunnelMCPPromptContextSelectsBinaryReference(t *testing.T) {
 	for _, snippet := range []string{
 		"https://github.com/openai/tunnel-client",
 		"git clone https://github.com/openai/tunnel-client.git",
-		"go build -o bin/tunnel-client ./cmd/client",
-		"go build -o bin/tunnel-client.exe ./cmd/client",
+		buildCommand,
 		"TUNNEL_CLIENT_BIN",
-		"--tunnel-client-bin /path/to/tunnel-client",
+		binaryFlag,
+		wrapperCommand,
 	} {
 		if !strings.Contains(text, snippet) {
 			t.Fatalf("expected binary guidance snippet %q in prompt context, got:\n%s", snippet, text)
 		}
 	}
+	for _, bad := range []string{
+		"python3 scripts/install_plugin.py",
+	} {
+		if strings.Contains(text, bad) {
+			t.Fatalf("expected binary guidance to omit %q, got:\n%s", bad, text)
+		}
+	}
+}
+
+func TestBundledBinaryGuidanceUsesWindowsSpecificCommands(t *testing.T) {
+	t.Parallel()
+
+	text := buildBundledBinaryGuidanceExcerpt("windows")
+	requirePluginContainsAll(t, text,
+		"go build -o bin/tunnel-client.exe ./cmd/client",
+		`powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Install-Plugin.ps1 --tunnel-client-bin C:\\path\\to\\tunnel-client.exe`,
+		`--tunnel-client-bin C:\\path\\to\\tunnel-client.exe`,
+	)
+	requirePluginOmitsAll(t, text,
+		"go build -o bin/tunnel-client ./cmd/client",
+		"sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client",
+		"--tunnel-client-bin /path/to/tunnel-client",
+	)
+}
+
+func TestBundledSetupInstallExcerptUsesUnixSpecificCommand(t *testing.T) {
+	t.Parallel()
+
+	text := buildBundledSetupInstallExcerpt("darwin")
+	requirePluginContainsAll(t, text, "sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client")
+	requirePluginOmitsAll(t, text, `powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Install-Plugin.ps1 --tunnel-client-bin C:\\path\\to\\tunnel-client.exe`)
 }
 
 func TestBuildTunnelMCPPromptContextSelectsProfileAndKeyReference(t *testing.T) {
@@ -112,6 +154,8 @@ func TestTunnelMCPExportToDirIncludesSkillReferences(t *testing.T) {
 		"skills/tunnel-mcp/references/profiles-state-and-keys.md",
 		"skills/tunnel-mcp/references/runtime-flows.md",
 		"skills/tunnel-mcp/references/troubleshooting.md",
+		"scripts/Install-Plugin.ps1",
+		"scripts/install_plugin.sh",
 		"scripts/tunnel_mcp.cmd",
 		"scripts/tunnel_mcp.ps1",
 	} {
@@ -144,6 +188,9 @@ func TestEmbeddedSkillIncludesMissingBinaryResponseContract(t *testing.T) {
 			t.Fatalf("expected embedded skill to contain %q, got:\n%s", snippet, text)
 		}
 	}
+	if strings.Contains(text, "python3 scripts/install_plugin.py") {
+		t.Fatalf("expected embedded skill to omit python installer guidance, got:\n%s", text)
+	}
 }
 
 func TestEmbeddedAgentsIncludesMissingBinaryResponseContract(t *testing.T) {
@@ -165,6 +212,24 @@ func TestEmbeddedAgentsIncludesMissingBinaryResponseContract(t *testing.T) {
 	} {
 		if !strings.Contains(text, snippet) {
 			t.Fatalf("expected embedded AGENTS to contain %q, got:\n%s", snippet, text)
+		}
+	}
+}
+
+func requirePluginContainsAll(t *testing.T, text string, snippets ...string) {
+	t.Helper()
+	for _, snippet := range snippets {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("expected text to contain %q, got:\n%s", snippet, text)
+		}
+	}
+}
+
+func requirePluginOmitsAll(t *testing.T, text string, snippets ...string) {
+	t.Helper()
+	for _, snippet := range snippets {
+		if strings.Contains(text, snippet) {
+			t.Fatalf("expected text to omit %q, got:\n%s", snippet, text)
 		}
 	}
 }

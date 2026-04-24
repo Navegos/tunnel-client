@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -13,6 +14,8 @@ import (
 
 //go:embed help_topics/*.txt
 var embeddedHelpTopics embed.FS
+
+const pluginBundleInstallCommandPlaceholder = "{{PLUGIN_BUNDLE_INSTALL_COMMAND}}"
 
 func availableHelpTopics() []string {
 	entries, err := embeddedHelpTopics.ReadDir("help_topics")
@@ -80,5 +83,18 @@ func loadHelpTopic(name string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return string(data), true
+	return renderHelpTopicForOS(string(data), runtime.GOOS), true
+}
+
+func renderHelpTopicForOS(body string, goos string) string {
+	return strings.ReplaceAll(body, pluginBundleInstallCommandPlaceholder, pluginBundleInstallCommand(goos))
+}
+
+func pluginBundleInstallCommand(goos string) string {
+	switch goos {
+	case "windows":
+		return `  Windows PowerShell: Set-Location C:\tmp\tunnel-plugin; powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe`
+	default:
+		return "  macOS/Linux: cd /tmp/tunnel-plugin && sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client"
+	}
 }

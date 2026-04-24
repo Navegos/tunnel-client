@@ -133,7 +133,8 @@ func TestCodexStatusTextLabelsPluginStateAsOnDisk(t *testing.T) {
 	}, "codex", "status")
 
 	require.NoError(t, err, stderr)
-	require.Contains(t, stdout, "Plugin on disk: installed in "+codexplugin.PluginTargetDir(codexHome))
+	require.Contains(t, stdout, "Tunnel MCP plugin:\n  Status: installed\n  Dir: "+codexplugin.PluginTargetDir(codexHome))
+	require.Contains(t, stdout, "Binary hint: "+fakeTunnelClient)
 	require.NotContains(t, stdout, "Plugin: installed")
 }
 
@@ -149,8 +150,39 @@ func TestCodexStatusTextClarifiesReadyCodexWithMissingOnDiskPlugin(t *testing.T)
 	}, "codex", "status")
 
 	require.NoError(t, err, stderr)
-	require.Contains(t, stdout, "Plugin on disk: not installed ("+codexplugin.PluginTargetDir(codexHome)+")")
+	require.Contains(t, stdout, "Tunnel MCP plugin:\n  Status: not installed\n  Expected dir: "+codexplugin.PluginTargetDir(codexHome))
 	require.Contains(t, stdout, "Note: Bridge and Assistant readiness reflect Codex itself, not plugin files on disk.")
+}
+
+func TestCodexStatusTextSeparatesPluginStateAfterUninstall(t *testing.T) {
+	codexHome := t.TempDir()
+	fakeTunnelClient := filepath.Join(t.TempDir(), "tunnel-client")
+	require.NoError(t, os.WriteFile(fakeTunnelClient, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	_, err := codexplugin.Install(codexHome, fakeTunnelClient)
+	require.NoError(t, err)
+
+	codexBin := writeFakeCodexScript(t)
+	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"CODEX_HOME": codexHome,
+		"HOME":       t.TempDir(),
+	}, "codex", "plugin", "uninstall", "--codex-home", codexHome)
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "Removed on-disk tunnel-mcp plugin bundle")
+
+	stdout, stderr, err = executeCommand(t, map[string]string{
+		"CODEX_HOME": codexHome,
+		"HOME":       t.TempDir(),
+	}, "codex", "status")
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "Codex:\n  State: ready")
+	require.Contains(t, stdout, "\n\nTunnel MCP plugin:\n  Status: not installed\n  Expected dir: "+codexplugin.PluginTargetDir(codexHome))
+	require.Contains(t, stdout, "\n\nCodex app / bridge:\n  app-server: supported\n  Bridge: ready\n  Assistant readiness: ready\n  Assistant: tunnel-client codex assistant\n  Account: worker@example.com (business)")
+	require.Contains(t, stdout, "Note: Bridge and Assistant readiness reflect Codex itself, not plugin files on disk.")
+	require.Contains(t, stdout, "\n\nCommands:\n  Install: ")
+	require.NotContains(t, stdout, "Plugin on disk: not installed (")
+	require.Less(t, strings.Index(stdout, "Tunnel MCP plugin:"), strings.Index(stdout, "Codex app / bridge:"))
 }
 
 func TestCodexStatusJSONReportsBridgeReadyWhenAssistantProbeStalls(t *testing.T) {
@@ -375,7 +407,13 @@ func TestCodexAssistantInjectsBundledBinaryAcquisitionGuidance(t *testing.T) {
 	require.Contains(t, found, "https://github.com/openai/tunnel-client")
 	require.Contains(t, found, "git clone https://github.com/openai/tunnel-client.git")
 	require.Contains(t, found, "TUNNEL_CLIENT_BIN")
-	require.Contains(t, found, "--tunnel-client-bin /path/to/tunnel-client")
+	if runtime.GOOS == "windows" {
+		require.Contains(t, found, `--tunnel-client-bin C:\\path\\to\\tunnel-client.exe`)
+		require.NotContains(t, found, "--tunnel-client-bin /path/to/tunnel-client")
+	} else {
+		require.Contains(t, found, "--tunnel-client-bin /path/to/tunnel-client")
+		require.NotContains(t, found, `--tunnel-client-bin C:\\path\\to\\tunnel-client.exe`)
+	}
 	require.NotContains(t, found, prompt)
 }
 

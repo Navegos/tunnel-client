@@ -63,8 +63,9 @@ Preferred install surfaces:
 
 - `tunnel-client codex plugin install` when the binary is available
 - `tunnel-client codex plugin uninstall` when the installed plugin should be reset or removed
-- `python3 plugins/tunnel-mcp/scripts/install_plugin.py` from a source checkout
-- `python3 scripts/install_plugin.py` from an exported plugin bundle root
+- `./plugins/tunnel-mcp/scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client` from a source checkout
+- `sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client` from an exported plugin bundle root on macOS/Linux
+- `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe` from an exported plugin bundle root on Windows
 
 ## Rules
 
@@ -76,7 +77,7 @@ Preferred install surfaces:
   use a helper shim that translates profile files into flags.
 - Do not assume a specific source checkout, build system, internal helper, or
   tmux is available. The installed plugin must work with `tunnel-client` alone;
-  Python is only needed for the standalone installer paths.
+  the public fallback install path should stay shell/PowerShell-first and delegate to the selected `tunnel-client` binary.
 - Use tmux when available; otherwise start `tunnel-client run --profile <name>`
   as a detached background process and report the PID/log path.
 - Tunnel state is owned by `tunnel-client`. By default it lives under

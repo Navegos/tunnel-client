@@ -138,16 +138,28 @@ func TestSessionsCreateConnectStatusStopJSON(t *testing.T) {
 	cmd = newRuntimesCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
 	cmd.SetArgs([]string{"connect", "--alias", "docs-mcp", "--organization-id", "org_123", "--mcp-server-url", "http://127.0.0.1:3001/mcp", "--json"})
 	require.NoError(t, cmd.Execute())
-	require.Contains(t, stdout.String(), `"healthy": true`)
-	require.Contains(t, stdout.String(), `"runtime_state": "ready"`)
+	var connectPayload map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &connectPayload))
+	require.Equal(t, true, connectPayload["healthy"])
+	require.Equal(t, "ready", connectPayload["runtime_state"])
+	require.Equal(t, true, connectPayload["process_running"])
+	_, hasPID := connectPayload["pid"]
+	require.False(t, hasPID)
 
 	stdout.Reset()
 	stderr.Reset()
 	cmd = newRuntimesCommandWithRuntime(lookupEnvMap(env), &stdout, &stderr, runtime)
 	cmd.SetArgs([]string{"status", "docs-mcp", "--json"})
 	require.NoError(t, cmd.Execute())
-	require.Contains(t, stdout.String(), `"alias": "docs-mcp"`)
-	require.Contains(t, stdout.String(), `"remote_lookup_attempted": true`)
+	var statusPayload map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &statusPayload))
+	require.Equal(t, "docs-mcp", statusPayload["alias"])
+	require.Equal(t, true, statusPayload["remote_lookup_attempted"])
+	require.Equal(t, true, statusPayload["process_running"])
+	processPayload, ok := statusPayload["process"].(map[string]any)
+	require.True(t, ok)
+	_, hasProcessPID := processPayload["pid"]
+	require.False(t, hasProcessPID)
 
 	stdout.Reset()
 	stderr.Reset()
@@ -174,6 +186,30 @@ func TestRuntimesListRejectsMixedRemoteScopeFamilies(t *testing.T) {
 
 	err := cmd.Execute()
 	require.EqualError(t, err, "runtimes list accepts exactly one remote scope family: --organization-id, --workspace-id, or --tenant-id")
+}
+
+func TestRuntimesCreateRejectsMixedRemoteScopeFamilies(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := newRuntimesCommandWithRuntime(lookupEnvMap(map[string]string{}), &stdout, &stderr, session.DefaultRuntime())
+	cmd.SetArgs([]string{"create", "--alias", "docs-mcp", "--organization-id", "org_123", "--workspace-id", "ws_123"})
+
+	err := cmd.Execute()
+	require.EqualError(t, err, "runtimes create accepts exactly one remote scope family: --organization-id or --workspace-id")
+}
+
+func TestRuntimesConnectRejectsMixedRemoteScopeFamilies(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := newRuntimesCommandWithRuntime(lookupEnvMap(map[string]string{}), &stdout, &stderr, session.DefaultRuntime())
+	cmd.SetArgs([]string{"connect", "--alias", "docs-mcp", "--organization-id", "org_123", "--workspace-id", "ws_123", "--mcp-server-url", "http://127.0.0.1:3001/mcp"})
+
+	err := cmd.Execute()
+	require.EqualError(t, err, "runtimes connect accepts exactly one remote scope family: --organization-id or --workspace-id")
 }
 
 func TestRuntimesListRejectsMultipleOrganizationIDs(t *testing.T) {
