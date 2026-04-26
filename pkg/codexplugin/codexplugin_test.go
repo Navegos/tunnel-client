@@ -3,6 +3,7 @@ package codexplugin
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -45,7 +46,9 @@ func TestExportWritesBinaryHintWhenProvided(t *testing.T) {
 	require.FileExists(t, filepath.Join(exportDir, "scripts", "install_plugin.sh"))
 	data, err := os.ReadFile(filepath.Join(exportDir, ".tunnel-client-bin"))
 	require.NoError(t, err)
-	require.Equal(t, tunnelClientBin+"\n", string(data))
+	normalized, err := NormalizeBinaryPath(tunnelClientBin)
+	require.NoError(t, err)
+	require.Equal(t, normalized+"\n", string(data))
 }
 
 func TestDetectReportsMissingPluginInstallHint(t *testing.T) {
@@ -82,7 +85,29 @@ func TestDetectReportsInstalledBinaryHint(t *testing.T) {
 		return "", false
 	})
 
-	require.Equal(t, tunnelClientBin, detection.PluginBinaryHint)
+	normalized, err := NormalizeBinaryPath(tunnelClientBin)
+	require.NoError(t, err)
+	require.Equal(t, normalized, detection.PluginBinaryHint)
+}
+
+func TestInstallNormalizesSymlinkedBinaryHint(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is not reliably available in Windows test environments")
+	}
+
+	codexHome := t.TempDir()
+	realBin := filepath.Join(t.TempDir(), "tunnel-client-real")
+	require.NoError(t, os.WriteFile(realBin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	symlinkBin := filepath.Join(t.TempDir(), "tunnel-client-link")
+	require.NoError(t, os.Symlink(realBin, symlinkBin))
+
+	detection, err := Install(codexHome, symlinkBin)
+	require.NoError(t, err)
+	normalized, err := NormalizeBinaryPath(realBin)
+	require.NoError(t, err)
+	require.Equal(t, normalized, detection.PluginBinaryHint)
 }
 
 func TestUninstallRemovesPluginBundleAndConfigSection(t *testing.T) {

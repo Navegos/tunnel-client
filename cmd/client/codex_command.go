@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -37,7 +36,9 @@ type codexStatusReport struct {
 	PluginInstalled             bool                     `json:"plugin_installed"`
 	PluginDir                   string                   `json:"plugin_dir,omitempty"`
 	PluginBinaryHint            string                   `json:"plugin_binary_hint,omitempty"`
+	CurrentTunnelClientPath     string                   `json:"current_tunnel_client_path,omitempty"`
 	PluginMatchesCurrentBinary  *bool                    `json:"plugin_matches_current_binary,omitempty"`
+	PluginReinstallCommand      string                   `json:"plugin_reinstall_command,omitempty"`
 	PreferredInstallMethod      string                   `json:"preferred_install_method,omitempty"`
 	RecommendedInstallCommand   string                   `json:"recommended_install_command,omitempty"`
 	RecommendedUpgradeCommand   string                   `json:"recommended_upgrade_command,omitempty"`
@@ -149,11 +150,17 @@ func inspectCodexStatus(lookupEnv func(string) (string, bool)) codexStatusReport
 	report.PluginInstalled = detection.PluginInstalled
 	report.PluginDir = detection.PluginDir
 	report.PluginBinaryHint = detection.PluginBinaryHint
-	if current := currentExecutablePath(); current != "" && detection.PluginBinaryHint != "" {
-		absCurrent, err := filepath.Abs(current)
+	if current := currentExecutablePath(); current != "" {
+		normalizedCurrent, err := codexplugin.NormalizeBinaryPath(current)
 		if err == nil {
-			matches := absCurrent == detection.PluginBinaryHint
-			report.PluginMatchesCurrentBinary = &matches
+			report.CurrentTunnelClientPath = normalizedCurrent
+			if detection.PluginBinaryHint != "" {
+				matches := normalizedCurrent == detection.PluginBinaryHint
+				report.PluginMatchesCurrentBinary = &matches
+				if !matches {
+					report.PluginReinstallCommand = "tunnel-client codex plugin install"
+				}
+			}
 		}
 	}
 
@@ -230,8 +237,15 @@ func printCodexStatus(w io.Writer, report codexStatusReport) {
 			optionalStatusLine("Dir", report.PluginDir),
 			optionalStatusLine("Binary hint", report.PluginBinaryHint),
 		)
+		if report.CurrentTunnelClientPath != "" {
+			pluginLines = append(pluginLines, fmt.Sprintf("Current tunnel-client: %s", report.CurrentTunnelClientPath))
+		}
 		if report.PluginMatchesCurrentBinary != nil {
 			pluginLines = append(pluginLines, fmt.Sprintf("Matches current tunnel-client: %t", *report.PluginMatchesCurrentBinary))
+			if !*report.PluginMatchesCurrentBinary && report.PluginReinstallCommand != "" {
+				pluginLines = append(pluginLines, "Codex will keep routing tunnel-mcp through the binary hint above until you repoint the plugin.")
+				pluginLines = append(pluginLines, fmt.Sprintf("Reinstall plugin to use this binary: %s", report.PluginReinstallCommand))
+			}
 		}
 	} else {
 		pluginLines = append(pluginLines, "Status: not installed")

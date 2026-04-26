@@ -96,6 +96,8 @@ func TestCodexStatusJSONReportsBridgeAndPluginState(t *testing.T) {
 	require.NoError(t, os.WriteFile(fakeTunnelClient, []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	_, err := codexplugin.Install(codexHome, fakeTunnelClient)
 	require.NoError(t, err)
+	normalizedHint, err := codexplugin.NormalizeBinaryPath(fakeTunnelClient)
+	require.NoError(t, err)
 
 	codexBin := writeFakeCodexScript(t)
 	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -109,7 +111,9 @@ func TestCodexStatusJSONReportsBridgeAndPluginState(t *testing.T) {
 	require.Contains(t, stdout, `"state": "ready"`)
 	require.Contains(t, stdout, `"app_server_supported": true`)
 	require.Contains(t, stdout, `"plugin_installed": true`)
-	require.Contains(t, stdout, `"plugin_binary_hint": "`+fakeTunnelClient+`"`)
+	require.Contains(t, stdout, `"plugin_binary_hint": "`+normalizedHint+`"`)
+	require.Contains(t, stdout, `"plugin_matches_current_binary": false`)
+	require.Contains(t, stdout, `"plugin_reinstall_command": "tunnel-client codex plugin install"`)
 	require.Contains(t, stdout, `"version": "codex-cli 0.123.0-alpha.8"`)
 	require.Contains(t, stdout, `"bridge_ready": true`)
 	require.Contains(t, stdout, `"assistant_state": "ready"`)
@@ -123,6 +127,8 @@ func TestCodexStatusTextLabelsPluginStateAsOnDisk(t *testing.T) {
 	require.NoError(t, os.WriteFile(fakeTunnelClient, []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	_, err := codexplugin.Install(codexHome, fakeTunnelClient)
 	require.NoError(t, err)
+	normalizedHint, err := codexplugin.NormalizeBinaryPath(fakeTunnelClient)
+	require.NoError(t, err)
 
 	codexBin := writeFakeCodexScript(t)
 	t.Setenv("PATH", filepath.Dir(codexBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -134,7 +140,9 @@ func TestCodexStatusTextLabelsPluginStateAsOnDisk(t *testing.T) {
 
 	require.NoError(t, err, stderr)
 	require.Contains(t, stdout, "Tunnel MCP plugin:\n  Status: installed\n  Dir: "+codexplugin.PluginTargetDir(codexHome))
-	require.Contains(t, stdout, "Binary hint: "+fakeTunnelClient)
+	require.Contains(t, stdout, "Binary hint: "+normalizedHint)
+	require.Contains(t, stdout, "Matches current tunnel-client: false")
+	require.Contains(t, stdout, "Reinstall plugin to use this binary: tunnel-client codex plugin install")
 	require.NotContains(t, stdout, "Plugin: installed")
 }
 

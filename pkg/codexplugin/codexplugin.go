@@ -1,7 +1,9 @@
 package codexplugin
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -287,17 +289,21 @@ func ReadInstalledBinaryHint(codexHome string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(data))
+	hint := strings.TrimSpace(string(data))
+	normalized, err := NormalizeBinaryPath(hint)
+	if err != nil {
+		return hint
+	}
+	return normalized
 }
 
 func writeBinaryHint(dir string, tunnelClientBinary string) error {
-	binaryPath := strings.TrimSpace(tunnelClientBinary)
-	if binaryPath == "" {
-		return nil
-	}
-	resolved, err := filepath.Abs(binaryPath)
+	resolved, err := NormalizeBinaryPath(tunnelClientBinary)
 	if err != nil {
-		return fmt.Errorf("resolve tunnel-client binary %q: %w", binaryPath, err)
+		return err
+	}
+	if resolved == "" {
+		return nil
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
@@ -314,4 +320,24 @@ func writeBinaryHint(dir string, tunnelClientBinary string) error {
 		return fmt.Errorf("write tunnel-client binary hint %s: %w", hintPath, err)
 	}
 	return nil
+}
+
+func NormalizeBinaryPath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", nil
+	}
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("resolve tunnel-client binary %q: %w", trimmed, err)
+	}
+	resolved, err := filepath.EvalSymlinks(absPath)
+	switch {
+	case err == nil:
+		return filepath.Clean(resolved), nil
+	case errors.Is(err, fs.ErrNotExist):
+		return filepath.Clean(absPath), nil
+	default:
+		return "", fmt.Errorf("resolve tunnel-client binary symlinks for %q: %w", absPath, err)
+	}
 }
