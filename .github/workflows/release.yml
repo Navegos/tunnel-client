@@ -86,7 +86,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          mkdir -p dist
+          mkdir -p dist/public dist/package-input
           BIN_NAME=${{ env.BINARY_NAME }}${{ matrix.ext }}
           LDFLAGS="-s -w -X ${{ env.MODULE_PATH }}/pkg/version.GitSHA=${GITHUB_SHA}"
           ASSET_TAG="${GITHUB_SHA::12}"
@@ -96,17 +96,21 @@ jobs:
             ASSET_TAG="${release_tag}"
           fi
           GOFLAGS="-trimpath -buildvcs=false"
-          go build $GOFLAGS -ldflags "$LDFLAGS" -o "dist/$BIN_NAME" ./cmd/client
+          RAW_BINARY_NAME=${{ env.BINARY_NAME }}-${ASSET_TAG}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          go build $GOFLAGS -ldflags "$LDFLAGS" -o "dist/package-input/$RAW_BINARY_NAME" ./cmd/client
 
           # Package as zip with OS/Arch/Tag in name
           ASSET_NAME=${{ env.BINARY_NAME }}-${ASSET_TAG}-${{ matrix.goos }}-${{ matrix.goarch }}
-          (cd dist && zip -9 "$ASSET_NAME.zip" "$BIN_NAME")
+          stage_dir="$(mktemp -d)"
+          cp "dist/package-input/$RAW_BINARY_NAME" "$stage_dir/$BIN_NAME"
+          (cd "$stage_dir" && zip -9 "${GITHUB_WORKSPACE}/dist/public/$ASSET_NAME.zip" "$BIN_NAME")
+          rm -rf "$stage_dir"
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: zips-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*.zip
+          name: release-assets-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/**
           if-no-files-found: error
 
   release:
@@ -124,23 +128,30 @@ jobs:
           done < <(./scripts/release_tag.sh parse "${GITHUB_REF_NAME}")
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: zips-*
+          pattern: release-assets-*
           merge-multiple: true
           path: dist
 
+      - name: Build combined distribution packages
+        run: |
+          ./scripts/build_distribution_package.sh \
+            --tag "${GITHUB_REF_NAME}" \
+            --binary-dir dist/package-input \
+            --output-dir dist/public
+
       - name: Generate SHA256 checksums
-        working-directory: dist
+        working-directory: dist/public
         run: |
           shopt -s nullglob
-          sha256sum *.zip > SHA256SUMS.txt
+          sha256sum *.zip *.tar.gz > SHA256SUMS.txt
 
       - name: Generate public URLs
-        working-directory: dist
+        working-directory: dist/public
         env:
           PUBLIC_BASE_URL: ${{ steps.release_meta.outputs.public_base_url }}
         run: |
           {
-            for file in *.zip SHA256SUMS.txt; do
+            for file in *.zip *.tar.gz SHA256SUMS.txt; do
               printf '%s/%s\n' "${PUBLIC_BASE_URL}" "${file}"
             done
           } > PUBLIC_URLS.txt
@@ -159,12 +170,12 @@ jobs:
             --account-name "${PUBLIC_STORAGE_ACCOUNT}" \
             --destination "${PUBLIC_STORAGE_CONTAINER}" \
             --destination-path "${{ steps.release_meta.outputs.public_blob_path }}" \
-            --source dist \
+            --source dist/public \
             --auth-mode login \
             --overwrite true
 
       - name: Verify public artifact URLs
-        working-directory: dist
+        working-directory: dist/public
         run: |
           while IFS= read -r url; do
             for attempt in 1 2 3 4 5; do
@@ -204,6 +215,7 @@ jobs:
           prerelease: ${{ steps.release_meta.outputs.prerelease == 'true' }}
           generate_release_notes: true
           files: |
-            dist/*.zip
-            dist/SHA256SUMS.txt
-            dist/PUBLIC_URLS.txt
+            dist/public/*.zip
+            dist/public/*.tar.gz
+            dist/public/SHA256SUMS.txt
+            dist/public/PUBLIC_URLS.txt
