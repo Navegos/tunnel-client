@@ -334,9 +334,11 @@ func TestCodexAssistantInjectsPackagedKnowledgeWhenRepoDocsMayBeAbsent(t *testin
 		}
 	}
 	require.NotEmpty(t, found)
+	require.Contains(t, found, "docs/end-user-guide.md")
 	require.Contains(t, found, "docs/onboarding.md")
-	require.Contains(t, found, "docs/enterprise-customer-onboarding.md")
+	require.Contains(t, found, "Connect ChatGPT")
 	require.Contains(t, found, "Connection: Tunnel")
+	require.Contains(t, found, "paste the `tunnel_id`")
 }
 
 func TestCodexAssistantInjectsBundledPluginReferences(t *testing.T) {

@@ -15,9 +15,9 @@ func TestBuildPromptContextFindsChatGPTTunnelSetupGuidance(t *testing.T) {
 	}
 	for _, snippet := range []string{
 		"Packaged tunnel-client knowledge base injected from the binary.",
+		"docs/end-user-guide.md",
 		"docs/onboarding.md",
-		"docs/enterprise-customer-onboarding.md",
-		"Step 2 - Configure the connector in ChatGPT",
+		"Connect ChatGPT",
 		"Connection: Tunnel",
 		"paste the `tunnel_id`",
 	} {

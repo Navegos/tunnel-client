@@ -21,7 +21,7 @@ ABS_BIN := $(abspath $(BIN))
 GIT_SHA    := $(if $(GIT_SHA),$(GIT_SHA),$(shell git rev-parse --short HEAD 2>/dev/null))
 LDFLAGS    := -X go.openai.org/api/tunnel-client/pkg/version.GitSHA=$(GIT_SHA)
 
-.PHONY: all help fmt test clean build-image mod-tidy admin-ui release-tag
+.PHONY: all help fmt test clean build-image mod-tidy admin-ui release-tag end-user-guide-screenshots end-user-guide-html end-user-guide-slides
 
 all: clean mod-tidy fmt test $(TARGET)
 
@@ -33,6 +33,9 @@ help:
 	@echo "  $(TARGET)     - Build the tunnel-client binary"
 	@echo "  test          - Run tests"
 	@echo "  admin-ui      - Build the admin UI assets (manual; not part of make all)"
+	@echo "  end-user-guide-screenshots - Capture the local /ui screenshots used by the shareable guide"
+	@echo "  end-user-guide-html - Render docs/end-user-guide.md to a standalone HTML archive"
+	@echo "  end-user-guide-slides - Render docs/end-user-guide.md to a local .pptx deck for on-demand slide import/distribution"
 	@echo "  release-tag   - Generate a release tag like v1.2.3--ember-orchid"
 	@echo "  clean         - Remove built binaries"
 	@echo "  build-image   - Build Docker image with tunnel-client binary"
@@ -77,6 +80,15 @@ fmt:
 admin-ui:
 	./$(ADMIN_UI_BUILD_SCRIPT) $(ADMIN_UI_DIR) $(ADMIN_UI_ASSETS_DIR)
 	@echo "Admin UI assets copied to $(abspath $(ADMIN_UI_ASSETS_DIR))"
+
+end-user-guide-screenshots:
+	./scripts/capture_end_user_guide_screenshots.sh
+
+end-user-guide-html:
+	./scripts/render_end_user_guide_html.sh
+
+end-user-guide-slides:
+	./scripts/render_end_user_guide_slides.sh
 
 release-tag:
 	@if [ -z "$(VERSION)" ] || [ -z "$(WORD)" ]; then \

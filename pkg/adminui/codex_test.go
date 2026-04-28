@@ -58,9 +58,11 @@ func TestBuildCodexKnowledgeItemUsesPackagedDocs(t *testing.T) {
 	}
 	for _, snippet := range []string{
 		"Packaged tunnel-client knowledge base injected from the binary.",
+		"docs/end-user-guide.md",
 		"docs/onboarding.md",
-		"docs/enterprise-customer-onboarding.md",
+		"Connect ChatGPT",
 		"Connection: Tunnel",
+		"paste the `tunnel_id`",
 	} {
 		if !strings.Contains(text, snippet) {
 			t.Fatalf("expected knowledge text to contain %q, got:\n%s", snippet, text)

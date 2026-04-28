@@ -12,6 +12,7 @@ If you searched for "How do I connect local MCP server to ChatGPT",
 
 ## Documentation
 
+- **Shareable end-user guide**: [`docs/end-user-guide.md`](docs/end-user-guide.md)
 - **Start here**: [`docs/onboarding.md`](docs/onboarding.md)
 - **Permissions, roles, and groups**: [`docs/permissions.md`](docs/permissions.md)
 - **Architecture diagrams**: [`docs/architecture.md`](docs/architecture.md)
@@ -23,6 +24,14 @@ If you searched for "How do I connect local MCP server to ChatGPT",
 - **Troubleshooting**: [`docs/troubleshooting.md`](docs/troubleshooting.md)
 - **Development & testing**: [`docs/development.md`](docs/development.md)
 - **Roadmap / design notes**: [`docs/roadmap.md`](docs/roadmap.md)
+
+To generate the shareable guide output locally:
+
+```bash
+make end-user-guide-screenshots
+make end-user-guide-html
+make end-user-guide-slides
+```
 
 ## For Codex / Claude / Copilot
 
