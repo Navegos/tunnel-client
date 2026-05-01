@@ -67,6 +67,29 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 					DiscoveryURLs: []string{"https://example.test/.well-known/oauth-protected-resource/mcp"},
 					Pending:       true,
 				},
+				Harpoon: logExportHarpoonData{
+					Status: harpoonStatusResponse{
+						Enabled:          true,
+						MaxResponseBytes: 2048,
+					},
+					Targets: harpoonTargetsResponse{Targets: []harpoonTargetResponse{{
+						Label:       "auth",
+						URL:         "https://alice:secret@auth.example/token/opaque-path-token?access_token=secret-token",
+						Description: "Auth target",
+						Category:    "oauth",
+					}}},
+					Calls: harpoonCallsResponse{Calls: []harpoonCallResponse{{
+						Timestamp:           time.Unix(1, 0).UTC(),
+						Label:               "auth",
+						URL:                 "https://alice:secret@auth.example/token/opaque-path-token?access_token=secret-token",
+						Method:              http.MethodPost,
+						Status:              200,
+						LatencyMS:           17,
+						ResponseContentType: "application/json",
+						ReqBytes:            12,
+						RespBytes:           21,
+					}}},
+				},
 			}
 		},
 	)(rec, req)
@@ -85,6 +108,7 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 	require.Contains(t, files, "admin/status.json")
 	require.Contains(t, files, "admin/system.json")
 	require.Contains(t, files, "admin/oauth.json")
+	require.Contains(t, files, "admin/harpoon.json")
 
 	require.Contains(t, files["tunnel-client.logs.ndjson"], "sk-REDACTED")
 	require.Contains(t, files["tunnel-client.logs.ndjson"], "Authorization: Bearer [REDACTED]")
@@ -105,6 +129,7 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 	require.Contains(t, manifest.Files, "admin/status.json")
 	require.Contains(t, manifest.Files, "admin/system.json")
 	require.Contains(t, manifest.Files, "admin/oauth.json")
+	require.Contains(t, manifest.Files, "admin/harpoon.json")
 	require.Equal(t, version.ClientName, manifest.Runtime.Client.ClientName)
 	require.Equal(t, version.SemanticVersion, manifest.Runtime.Client.SemanticVersion)
 	require.Equal(t, version.Version, manifest.Runtime.Client.Version)
@@ -131,6 +156,37 @@ func TestHandleLogsExportReturnsRedactedTarGz(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(files["admin/oauth.json"]), &oauth))
 	require.Equal(t, []string{"https://example.test/.well-known/oauth-protected-resource/mcp"}, oauth.DiscoveryURLs)
 	require.True(t, oauth.Pending)
+
+	var harpoonExport logExportHarpoonData
+	require.NoError(t, json.Unmarshal([]byte(files["admin/harpoon.json"]), &harpoonExport))
+	require.True(t, harpoonExport.Status.Enabled)
+	require.Len(t, harpoonExport.Targets.Targets, 1)
+	require.Equal(t, "https://auth.example/token/[REDACTED]", harpoonExport.Targets.Targets[0].URL)
+	require.Len(t, harpoonExport.Calls.Calls, 1)
+	require.Equal(t, "application/json", harpoonExport.Calls.Calls[0].ResponseContentType)
+	require.NotContains(t, files["admin/harpoon.json"], "alice:secret")
+	require.NotContains(t, files["admin/harpoon.json"], "opaque-path-token")
+	require.NotContains(t, files["admin/harpoon.json"], "secret-token")
+}
+
+func TestRedactSnapshotStringRedactsURLPathSecrets(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"https://auth.example/oauth/token/[REDACTED]/callback",
+		redactSnapshotString("https://alice:secret@auth.example/oauth/token/path-token-value/callback?client_secret=query-secret"),
+	)
+	require.Equal(
+		t,
+		"https://auth.example/oauth/[REDACTED]/callback",
+		redactSnapshotString("https://auth.example/oauth/embedded-secret-token/callback"),
+	)
+	require.Equal(
+		t,
+		"https://auth.example/token",
+		redactSnapshotString("https://auth.example/token?access_token=query-secret"),
+	)
 }
 
 func TestBuildLogsArchiveFiltersBeforeCallSite(t *testing.T) {
@@ -152,6 +208,7 @@ func TestBuildLogsArchiveFiltersBeforeCallSite(t *testing.T) {
 	require.Contains(t, files, "admin/status.json")
 	require.Contains(t, files, "admin/system.json")
 	require.Contains(t, files, "admin/oauth.json")
+	require.Contains(t, files, "admin/harpoon.json")
 }
 
 func TestBuildLogsArchiveOmitsMetricsFileWhenSnapshotUnavailable(t *testing.T) {
@@ -166,6 +223,7 @@ func TestBuildLogsArchiveOmitsMetricsFileWhenSnapshotUnavailable(t *testing.T) {
 	require.Contains(t, files, "admin/status.json")
 	require.Contains(t, files, "admin/system.json")
 	require.Contains(t, files, "admin/oauth.json")
+	require.Contains(t, files, "admin/harpoon.json")
 
 	var manifest logExportManifest
 	require.NoError(t, json.Unmarshal([]byte(files["manifest.json"]), &manifest))

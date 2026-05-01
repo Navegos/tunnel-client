@@ -66,9 +66,16 @@ type metricsSnapshot struct {
 }
 
 type logExportAdminSnapshots struct {
-	Status statusResponse      `json:"status"`
-	System systemResponse      `json:"system"`
-	OAuth  oauthStatusResponse `json:"oauth"`
+	Status  statusResponse       `json:"status"`
+	System  systemResponse       `json:"system"`
+	OAuth   oauthStatusResponse  `json:"oauth"`
+	Harpoon logExportHarpoonData `json:"harpoon"`
+}
+
+type logExportHarpoonData struct {
+	Status  harpoonStatusResponse  `json:"status"`
+	Targets harpoonTargetsResponse `json:"targets"`
+	Calls   harpoonCallsResponse   `json:"calls"`
 }
 
 // RuntimeSnapshotProvider returns redacted runtime metadata for support log exports.
@@ -203,7 +210,7 @@ func buildLogsArchive(
 	if snapshot.Filename != "" {
 		files = append(files, snapshot.Filename)
 	}
-	files = append(files, "admin/status.json", "admin/system.json", "admin/oauth.json")
+	files = append(files, "admin/status.json", "admin/system.json", "admin/oauth.json", "admin/harpoon.json")
 	manifest := logExportManifest{
 		GeneratedAt:       now,
 		WindowStart:       now.Add(-window),
@@ -220,7 +227,7 @@ func buildLogsArchive(
 	if err := writeTarJSON(tw, "manifest.json", manifest); err != nil {
 		return nil, err
 	}
-	if err := writeTarFile(tw, "README.txt", []byte("Tunnel-client log export.\n\nLogs are captured from the admin UI in-memory buffer and redacted before export.\nThe NDJSON file contains one redacted JSON log event per line.\nmanifest.json includes the archive index and redacted runtime metadata.\ntunnel-client.runtime.yaml includes redacted argv, relevant environment variables, the startup YAML config file when present, and the effective startup config.\nThe Prometheus snapshot is captured at export time from /metrics when available.\nadmin/status.json, admin/system.json, and admin/oauth.json mirror the current admin API snapshots at export time.\n")); err != nil {
+	if err := writeTarFile(tw, "README.txt", []byte("Tunnel-client log export.\n\nLogs are captured from the admin UI in-memory buffer and redacted before export.\nThe NDJSON file contains one redacted JSON log event per line.\nmanifest.json includes the archive index and redacted runtime metadata.\ntunnel-client.runtime.yaml includes redacted argv, relevant environment variables, the startup YAML config file when present, and the effective startup config.\nThe Prometheus snapshot is captured at export time from /metrics when available.\nadmin/status.json, admin/system.json, admin/oauth.json, and admin/harpoon.json mirror the current admin API snapshots at export time.\n")); err != nil {
 		return nil, err
 	}
 	if err := writeTarYAML(tw, runtimeSnapshotFile, runtime); err != nil {
@@ -249,6 +256,9 @@ func buildLogsArchive(
 		return nil, err
 	}
 	if err := writeTarRedactedJSON(tw, "admin/oauth.json", adminSnapshots.OAuth); err != nil {
+		return nil, err
+	}
+	if err := writeTarRedactedJSON(tw, "admin/harpoon.json", adminSnapshots.Harpoon); err != nil {
 		return nil, err
 	}
 
@@ -801,7 +811,55 @@ func redactSnapshotString(s string) string {
 	parsed.User = nil
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
-	return parsed.String()
+	parsed.Path = redactURLPathSecrets(parsed.Path)
+	parsed.RawPath = ""
+	return strings.ReplaceAll(parsed.String(), "%5BREDACTED%5D", "[REDACTED]")
+}
+
+func redactURLPathSecrets(path string) string {
+	if path == "" {
+		return path
+	}
+	segments := strings.Split(path, "/")
+	redactNext := false
+	for i, segment := range segments {
+		if segment == "" {
+			continue
+		}
+		if redactNext {
+			segments[i] = "[REDACTED]"
+			redactNext = false
+			continue
+		}
+
+		redacted := redactString(segment)
+		if redacted != segment || isLikelySecretPathSegment(segment) {
+			segments[i] = "[REDACTED]"
+			continue
+		}
+		if isSensitivePathKeySegment(segment) {
+			redactNext = true
+		}
+	}
+	return strings.Join(segments, "/")
+}
+
+func isSensitivePathKeySegment(segment string) bool {
+	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(segment))
+	switch normalized {
+	case "api_key", "apikey", "access_token", "refresh_token", "id_token", "client_secret",
+		"code", "password", "secret", "token", "authorization", "cookie", "key":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLikelySecretPathSegment(segment string) bool {
+	normalized := strings.ToLower(segment)
+	return strings.Contains(normalized, "secret") ||
+		strings.HasPrefix(normalized, "sk-") ||
+		strings.Count(segment, ".") >= 2 && len(segment) >= 40
 }
 
 func writeTarFile(tw *tar.Writer, name string, data []byte) error {

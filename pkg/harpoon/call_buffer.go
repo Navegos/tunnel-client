@@ -16,6 +16,7 @@ type CallEntry struct {
 	Method                  string    `json:"method"`
 	Status                  int       `json:"status"`
 	LatencyMS               int       `json:"latency_ms"`
+	ResponseContentType     string    `json:"response_content_type,omitempty"`
 	ReqBytes                int       `json:"req_bytes"`
 	RespBytes               int       `json:"resp_bytes"`
 	Error                   string    `json:"error,omitempty"`

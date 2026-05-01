@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -360,7 +361,7 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 		recordMetrics(0, metricOutcomeRequestError, 0)
 		return nil, newToolError(label, "request failed")
 	}
-	filteredHeaders, droppedHeaderCount := filterOutboundHeaders(params.Headers)
+	filteredHeaders, droppedHeaderCount, droppedHeaderClassifications := filterOutboundHeaders(params.Headers)
 	for key, values := range filteredHeaders {
 		for _, value := range values {
 			req.Header.Add(key, value)
@@ -370,7 +371,9 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 	if droppedHeaderCount > 0 {
 		logger.InfoContext(ctx, "harpoon request dropped non-allowlisted headers",
 			slog.String("label", label),
+			slog.String("target_label", label),
 			slog.Int("dropped_header_count", droppedHeaderCount),
+			slog.Any("dropped_header_classifications", droppedHeaderClassifications),
 		)
 	}
 
@@ -383,9 +386,11 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 		cause := classifyRequestError(err)
 		logFields := []any{
 			slog.String("label", label),
+			slog.String("target_label", label),
 			slog.String("url", resolved.String()),
 			slog.String("method", method),
 			slog.String("error", cause),
+			slog.Int("latency_ms", int(time.Since(start).Milliseconds())),
 			slog.Int("request_bytes", len(bodyBytes)),
 			slog.Int("status_code", 0),
 			slog.Int(maxBodyLogFieldName, 0),
@@ -439,24 +444,28 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 	if readErr != nil {
 		logger.InfoContext(ctx, "harpoon response read failed",
 			slog.String("label", label),
+			slog.String("target_label", label),
 			slog.String("url", resp.Request.URL.String()),
 			slog.String("method", method),
 			slog.String("error", "response read failed"),
+			slog.Int("latency_ms", int(time.Since(start).Milliseconds())),
 			slog.Int("request_bytes", len(bodyBytes)),
 			slog.Int("status_code", resp.StatusCode),
+			slog.String("response_content_type", responseContentTypeForLog(resp.Header.Get("Content-Type"))),
 			slog.Int(maxBodyLogFieldName, len(body)),
 		)
 		s.recordCall(callRecordInput{
-			label:        label,
-			url:          resp.Request.URL.String(),
-			method:       method,
-			status:       resp.StatusCode,
-			reqBytes:     len(bodyBytes),
-			respBytes:    len(body),
-			errorMsg:     "response read failed",
-			startedAt:    start,
-			params:       params,
-			responseBody: body,
+			label:               label,
+			url:                 resp.Request.URL.String(),
+			method:              method,
+			status:              resp.StatusCode,
+			reqBytes:            len(bodyBytes),
+			respBytes:           len(body),
+			errorMsg:            "response read failed",
+			startedAt:           start,
+			params:              params,
+			responseBody:        body,
+			responseContentType: responseContentTypeForLog(resp.Header.Get("Content-Type")),
 		})
 		recordMetrics(resp.StatusCode, metricOutcomeResponseReadError, len(body))
 		return nil, newToolError(label, "response read failed")
@@ -464,23 +473,27 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 	if tooLarge {
 		logger.InfoContext(ctx, "harpoon response too large",
 			slog.String("label", label),
+			slog.String("target_label", label),
 			slog.String("url", resp.Request.URL.String()),
 			slog.String("method", method),
+			slog.Int("latency_ms", int(time.Since(start).Milliseconds())),
 			slog.Int("request_bytes", len(bodyBytes)),
 			slog.Int("status_code", resp.StatusCode),
+			slog.String("response_content_type", responseContentTypeForLog(resp.Header.Get("Content-Type"))),
 			slog.Int(maxBodyLogFieldName, len(body)),
 		)
 		s.recordCall(callRecordInput{
-			label:        label,
-			url:          resp.Request.URL.String(),
-			method:       method,
-			status:       resp.StatusCode,
-			reqBytes:     len(bodyBytes),
-			respBytes:    len(body),
-			errorMsg:     "response exceeds size limit",
-			startedAt:    start,
-			params:       params,
-			responseBody: body,
+			label:               label,
+			url:                 resp.Request.URL.String(),
+			method:              method,
+			status:              resp.StatusCode,
+			reqBytes:            len(bodyBytes),
+			respBytes:           len(body),
+			errorMsg:            "response exceeds size limit",
+			startedAt:           start,
+			params:              params,
+			responseBody:        body,
+			responseContentType: responseContentTypeForLog(resp.Header.Get("Content-Type")),
 		})
 		recordMetrics(resp.StatusCode, metricOutcomeResponseTooLarge, len(body))
 		return nil, newToolError(label, "response exceeds size limit")
@@ -495,24 +508,28 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 
 	logger.InfoContext(ctx, "harpoon request completed",
 		slog.String("label", label),
+		slog.String("target_label", label),
 		slog.String("url", resp.Request.URL.String()),
 		slog.String("method", method),
+		slog.Int("latency_ms", int(time.Since(start).Milliseconds())),
 		slog.Int("status_code", resp.StatusCode),
+		slog.String("response_content_type", responseContentTypeForLog(resp.Header.Get("Content-Type"))),
 		slog.Int("request_bytes", len(bodyBytes)),
 		slog.Int(maxBodyLogFieldName, len(body)),
 	)
 
 	s.recordCall(callRecordInput{
-		label:        label,
-		url:          resp.Request.URL.String(),
-		method:       method,
-		status:       resp.StatusCode,
-		reqBytes:     len(bodyBytes),
-		respBytes:    len(body),
-		errorMsg:     "",
-		startedAt:    start,
-		params:       params,
-		responseBody: body,
+		label:               label,
+		url:                 resp.Request.URL.String(),
+		method:              method,
+		status:              resp.StatusCode,
+		reqBytes:            len(bodyBytes),
+		respBytes:           len(body),
+		errorMsg:            "",
+		startedAt:           start,
+		params:              params,
+		responseBody:        body,
+		responseContentType: responseContentTypeForLog(resp.Header.Get("Content-Type")),
 		responseBodyTransformed: func() []byte {
 			if bodyTransformed {
 				return transformedBody
@@ -531,12 +548,13 @@ func (s *Server) callTarget(ctx context.Context, params callTargetRequest) (*cal
 	}, nil
 }
 
-func filterOutboundHeaders(headers map[string]string) (http.Header, int) {
+func filterOutboundHeaders(headers map[string]string) (http.Header, int, []string) {
 	if len(headers) == 0 {
-		return http.Header{}, 0
+		return http.Header{}, 0, nil
 	}
 	out := make(http.Header)
 	dropped := 0
+	classifications := make(map[string]struct{})
 	for key, value := range headers {
 		trimmedKey := strings.TrimSpace(key)
 		if trimmedKey == "" {
@@ -545,11 +563,64 @@ func filterOutboundHeaders(headers map[string]string) (http.Header, int) {
 		canonical := http.CanonicalHeaderKey(trimmedKey)
 		if _, ok := allowedOutboundHeaders[canonical]; !ok {
 			dropped++
+			classifications[classifyDroppedHeaderName(canonical)] = struct{}{}
 			continue
 		}
 		out.Set(canonical, value)
 	}
-	return out, dropped
+	return out, dropped, sortedKeys(classifications)
+}
+
+func classifyDroppedHeaderName(headerName string) string {
+	normalized := strings.ToLower(strings.TrimSpace(headerName))
+	if normalized == "" {
+		return "empty"
+	}
+	if isSensitiveHeaderName(normalized) {
+		return "sensitive-name"
+	}
+	if normalized == "user-agent" {
+		return "user-agent"
+	}
+	if strings.HasPrefix(normalized, "x-") {
+		return "custom"
+	}
+	return "not-allowlisted"
+}
+
+func isSensitiveHeaderName(headerName string) bool {
+	normalized := strings.NewReplacer("-", "_", ".", "_").Replace(strings.ToLower(headerName))
+	for _, token := range strings.Split(normalized, "_") {
+		switch token {
+		case "authorization", "cookie", "key", "secret", "token", "password":
+			return true
+		}
+	}
+	return false
+}
+
+func sortedKeys(values map[string]struct{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func responseContentTypeForLog(contentType string) string {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return ""
+	}
+	mediaType, _, found := strings.Cut(contentType, ";")
+	if found {
+		contentType = mediaType
+	}
+	return strings.ToLower(strings.TrimSpace(contentType))
 }
 
 func allowedMethodsList() []string {
@@ -920,6 +991,7 @@ type callRecordInput struct {
 	startedAt               time.Time
 	params                  callTargetRequest
 	responseBody            []byte
+	responseContentType     string
 	responseBodyTransformed []byte
 }
 
@@ -928,15 +1000,16 @@ func (s *Server) recordCall(input callRecordInput) {
 		return
 	}
 	entry := CallEntry{
-		Timestamp: time.Now().UTC(),
-		Label:     input.label,
-		URL:       input.url,
-		Method:    input.method,
-		Status:    input.status,
-		LatencyMS: int(time.Since(input.startedAt).Milliseconds()),
-		ReqBytes:  input.reqBytes,
-		RespBytes: input.respBytes,
-		Error:     input.errorMsg,
+		Timestamp:           time.Now().UTC(),
+		Label:               input.label,
+		URL:                 input.url,
+		Method:              input.method,
+		Status:              input.status,
+		LatencyMS:           int(time.Since(input.startedAt).Milliseconds()),
+		ResponseContentType: input.responseContentType,
+		ReqBytes:            input.reqBytes,
+		RespBytes:           input.respBytes,
+		Error:               input.errorMsg,
 	}
 	if s.cfg != nil && s.cfg.CapturePayloads {
 		entry.RequestBody = input.params.Body

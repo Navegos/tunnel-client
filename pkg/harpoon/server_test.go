@@ -690,6 +690,7 @@ func TestCallTargetFiltersHeadersAndSetsStableUserAgent(t *testing.T) {
 	var receivedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "Application/JSON; charset=utf-8")
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer server.Close()
@@ -724,6 +725,28 @@ func TestCallTargetFiltersHeadersAndSetsStableUserAgent(t *testing.T) {
 	require.Equal(t, "application/json", receivedHeaders.Get("Content-Type"))
 	require.Equal(t, version.UserAgent, receivedHeaders.Get("User-Agent"))
 	require.Equal(t, "", receivedHeaders.Get("X-Trace-Id"))
+
+	snapshot := client.callBuffer.Snapshot(1, "svc")
+	require.Len(t, snapshot, 1)
+	require.Equal(t, "application/json", snapshot[0].ResponseContentType)
+}
+
+func TestFilterOutboundHeadersReportsLowCardinalityDrops(t *testing.T) {
+	t.Parallel()
+
+	headers, dropped, classifications := filterOutboundHeaders(map[string]string{
+		"Accept":        "application/json",
+		"X-Trace-Id":    "trace",
+		"X-API-Key":     "secret",
+		"User-Agent":    "override",
+		"Forwarded":     "for=example",
+		"Authorization": "Bearer token",
+	})
+
+	require.Equal(t, "application/json", headers.Get("Accept"))
+	require.Equal(t, "Bearer token", headers.Get("Authorization"))
+	require.Equal(t, 4, dropped)
+	require.Equal(t, []string{"custom", "not-allowlisted", "sensitive-name", "user-agent"}, classifications)
 }
 
 func newTestServer(t *testing.T, cfg *config.HarpoonConfig) *Server {

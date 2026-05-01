@@ -46,6 +46,7 @@ type harpoonCallResponse struct {
 	Method                  string    `json:"method"`
 	Status                  int       `json:"status"`
 	LatencyMS               int       `json:"latency_ms"`
+	ResponseContentType     string    `json:"response_content_type,omitempty"`
 	ReqBytes                int       `json:"req_bytes"`
 	RespBytes               int       `json:"resp_bytes"`
 	Error                   string    `json:"error,omitempty"`
@@ -144,15 +145,16 @@ func buildHarpoonCalls(buffer *harpoon.CallBuffer, cfg *config.HarpoonConfig, la
 	out := make([]harpoonCallResponse, 0, len(entries))
 	for _, entry := range entries {
 		call := harpoonCallResponse{
-			Timestamp: entry.Timestamp,
-			Label:     entry.Label,
-			URL:       entry.URL,
-			Method:    entry.Method,
-			Status:    entry.Status,
-			LatencyMS: entry.LatencyMS,
-			ReqBytes:  entry.ReqBytes,
-			RespBytes: entry.RespBytes,
-			Error:     entry.Error,
+			Timestamp:           entry.Timestamp,
+			Label:               entry.Label,
+			URL:                 entry.URL,
+			Method:              entry.Method,
+			Status:              entry.Status,
+			LatencyMS:           entry.LatencyMS,
+			ResponseContentType: entry.ResponseContentType,
+			ReqBytes:            entry.ReqBytes,
+			RespBytes:           entry.RespBytes,
+			Error:               entry.Error,
 		}
 		if capture {
 			req := entry.RequestBody

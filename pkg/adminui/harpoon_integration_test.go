@@ -42,17 +42,18 @@ func TestHarpoonAdminUIEndpointsPolling(t *testing.T) {
 
 	buffer := harpoon.NewCallBuffer()
 	buffer.RecordCall(harpoon.CallEntry{
-		Timestamp:    time.Unix(1, 0),
-		Label:        "auth",
-		URL:          "https://auth.example.com/v1/ping",
-		Method:       http.MethodGet,
-		Status:       200,
-		LatencyMS:    12,
-		ReqBytes:     0,
-		RespBytes:    21,
-		RequestBody:  "",
-		ResponseBody: "{\"ok\":true}",
-		BodyIsBase64: false,
+		Timestamp:           time.Unix(1, 0),
+		Label:               "auth",
+		URL:                 "https://auth.example.com/v1/ping",
+		Method:              http.MethodGet,
+		Status:              200,
+		LatencyMS:           12,
+		ResponseContentType: "application/json",
+		ReqBytes:            0,
+		RespBytes:           21,
+		RequestBody:         "",
+		ResponseBody:        "{\"ok\":true}",
+		BodyIsBase64:        false,
 	})
 	buffer.RecordCall(harpoon.CallEntry{
 		Timestamp:    time.Unix(2, 0),
@@ -98,6 +99,7 @@ func TestHarpoonAdminUIEndpointsPolling(t *testing.T) {
 	fetchJSON(t, server.URL+"/api/harpoon/calls?label=auth", &authCalls)
 	require.Len(t, authCalls.Calls, 1)
 	require.Equal(t, "auth", authCalls.Calls[0].Label)
+	require.Equal(t, "application/json", authCalls.Calls[0].ResponseContentType)
 	require.NotNil(t, authCalls.Calls[0].ResponseBody)
 
 	buffer.RecordCall(harpoon.CallEntry{

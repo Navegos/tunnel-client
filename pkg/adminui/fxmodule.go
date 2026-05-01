@@ -130,6 +130,11 @@ func registerRoutes(p routeParams) error {
 				Status: buildStatus(p),
 				System: buildSystem(p),
 				OAuth:  buildOAuthStatus(p),
+				Harpoon: logExportHarpoonData{
+					Status:  buildHarpoonStatus(p.HarpoonReg, p.HarpoonConfig, p.ProxyHealth),
+					Targets: buildHarpoonTargets(p.HarpoonReg),
+					Calls:   buildHarpoonCalls(p.HarpoonBuffer, p.HarpoonConfig, "", 100),
+				},
 			}
 		},
 	))
