@@ -103,6 +103,7 @@ control_plane:
   poll_timeout: 30s
   extra_headers:
     X-Debug-Mode: "1"
+    X-Internal-Auth: env:CONTROL_PLANE_HEADER_VALUE
 log:
   level: info
   format: json
@@ -122,6 +123,10 @@ mcp:
   commands:
     - channel: tools
       command: python -m tools_mcp
+  extra_headers:
+    X-Internal-Auth: env:MCP_RUNTIME_HEADER_VALUE
+  discovery_extra_headers:
+    X-Discovery-Auth: file:/run/secrets/mcp-discovery-header
   connection_max_ttl: 10m
   max_concurrent_requests: 10
 harpoon:
@@ -139,6 +144,11 @@ Secret-bearing fields should use `env:VARNAME` or `file:/path/to/secret` when
 possible. `control_plane.api_key` accepts either form and resolves it at
 startup; direct literal values are accepted for compatibility but are not
 recommended for checked-in configs.
+For static header values, use `env:VARNAME` or `file:/path/to/secret` on the
+value side to keep secrets out of argv, profiles, and checked-in YAML. This is
+supported for control-plane, MCP runtime, and MCP discovery/probe extra
+headers. The `env:` and `file:` prefixes are reserved for these references;
+all other values are treated literally.
 
 The admin UI log export includes `tunnel-client.runtime.yaml`, a redacted
 snapshot of argv, relevant environment variables, the startup YAML config file
@@ -244,6 +254,9 @@ tunnel-client profiles add corp-proxy --sample sample_mcp_enterprise_proxy --tun
 - **Extra headers (optional)**
   - Flag (repeatable): `--control-plane.extra-headers "Key: Value"`
   - Env: `CONTROL_PLANE_EXTRA_HEADERS="Key: Value, Key2: Value2"`
+  - YAML: `control_plane.extra_headers`
+  - Header values accept `env:VARNAME` and `file:/path/to/secret`; all other
+    values are treated literally.
 
 ## TLS trust (custom CA bundle)
 
@@ -349,6 +362,29 @@ routing, streaming, OAuth discovery, and common setup pitfalls, see
     channel-qualified `--mcp.server-url` entry provides its own `client-cert` +
     `client-key`.
   - Note: stdio channels ignore mTLS settings.
+- **Static MCP headers (optional)**
+  - Flag (repeatable): `--mcp.extra-headers "Key: Value"`
+  - Env: `MCP_EXTRA_HEADERS="Key: Value, Key2: Value2"`
+  - YAML: `mcp.extra_headers`
+  - Header values accept `env:VARNAME` and `file:/path/to/secret`; all other
+    values are treated literally.
+  - Scope: sent only to the configured MCP server origin for outbound MCP HTTP
+    traffic. These headers are not sent to the OpenAI control plane or
+    unrelated authorization-server hosts.
+  - Conflict behavior: connector-forwarded request headers are applied last and
+    override these static values case-insensitively.
+- **Static discovery/probe headers (optional)**
+  - Flag (repeatable): `--mcp.discovery-extra-headers "Key: Value"`
+  - Env: `MCP_DISCOVERY_EXTRA_HEADERS="Key: Value, Key2: Value2"`
+  - YAML: `mcp.discovery_extra_headers`
+  - Header values accept `env:VARNAME` and `file:/path/to/secret`; all other
+    values are treated literally.
+  - Scope: sent only to MCP discovery/probe requests for the configured MCP
+    server origin, including OAuth Protected Resource Metadata discovery,
+    WWW-Authenticate probing, and the startup MCP initialize probe.
+  - Conflict behavior: these discovery/probe headers override
+    `MCP_EXTRA_HEADERS` for discovery/probe requests. If connector-forwarded
+    headers are present on a request, they are still applied last.
 
 **OAuth-protected MCP notes:**
 

@@ -86,6 +86,8 @@ var commonFlagAliases = []flagAlias{
 	{Canonical: "control-plane.api-key", Alias: "control-plane-api-key", Kind: "string"},
 	{Canonical: "mcp.server-url", Alias: "mcp-server-url", Kind: "stringArray"},
 	{Canonical: "mcp.command", Alias: "mcp-command", Kind: "stringArray"},
+	{Canonical: "mcp.extra-headers", Alias: "mcp-extra-headers", Kind: "stringArray"},
+	{Canonical: "mcp.discovery-extra-headers", Alias: "mcp-discovery-extra-headers", Kind: "stringArray"},
 	{Canonical: "health.listen-addr", Alias: "health-listen-addr", Kind: "string"},
 	{Canonical: "health.url-file", Alias: "health-url-file", Kind: "string"},
 }
@@ -180,6 +182,8 @@ type MCPConfig struct {
 	ChannelBindings       []MCPChannelBinding
 	ConnectionMaxTTL      time.Duration
 	MaxConcurrentRequests int
+	ExtraHeaders          map[string]string
+	DiscoveryExtraHeaders map[string]string
 	HTTPProxy             *url.URL
 	HTTPProxySource       ProxySource
 }
@@ -313,6 +317,7 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "\nEnvironment variables:")
 	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_API_KEY\tAPI key used to authenticate to the tunnel control plane (required; preferred)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPENAI_API_KEY\tAPI key env var used when CONTROL_PLANE_API_KEY unset")
+	_, _ = fmt.Fprintln(fs.Output(), "  CONTROL_PLANE_EXTRA_HEADERS\tStatic headers for tunnel control-plane requests; values accept env:VAR or file:/path (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_CONFIG\tPath to YAML config file (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_PROFILE\tProfile name to load from the profile directory (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_PROFILE_DIR\tProfile directory override (default: $XDG_CONFIG_HOME/tunnel-client or ~/.config/tunnel-client)")
@@ -323,6 +328,8 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "  OPEN_WEB_UI\tSet to true to open the embedded web UI in a browser on startup (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  ADMIN_UI_LOG_BUFFER_EVENTS\tRecent log-event capacity for the embedded web UI and export archive (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  CA_BUNDLE\tPath to a PEM CA bundle used for outbound TLS connections (additive to system trust) (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  MCP_EXTRA_HEADERS\tStatic headers for outbound MCP HTTP requests to the configured MCP server origin; values accept env:VAR or file:/path (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  MCP_DISCOVERY_EXTRA_HEADERS\tStatic headers for MCP discovery/probe requests to the configured MCP server origin; values accept env:VAR or file:/path (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  MCP_CLIENT_CERT\tPath (or env:VAR) to PEM client certificate for MCP mTLS (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  MCP_CLIENT_KEY\tPath (or env:VAR) to PEM client private key for MCP mTLS (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  PROXY_CHECK_INTERVAL\tInterval between proxy connectivity checks (optional)")
@@ -340,7 +347,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("control-plane.http-proxy", "", "Outbound HTTP proxy for the control plane (format <url|env:VAR>)")
 	fs.Int("control-plane.max-inflight", defaultControlPlaneMaxInFlight, "Maximum number of in-flight MCP requests before applying backpressure (env.CONTROL_PLANE_MAX_INFLIGHT_REQUESTS, max 10000)")
 	fs.Duration("control-plane.poll-timeout", defaultControlPlanePollTimeout, "Long-poll timeout when fetching commands from the control plane (env.CONTROL_PLANE_POLL_TIMEOUT)")
-	fs.StringArray("control-plane.extra-headers", nil, "Additional HTTP headers to send to the tunnel control-plane (format 'Key: Value', repeatable) (env.CONTROL_PLANE_EXTRA_HEADERS)")
+	fs.StringArray("control-plane.extra-headers", nil, "Additional HTTP headers to send to the tunnel control-plane (format 'Key: Value', repeatable; values accept env:VAR or file:/path) (env.CONTROL_PLANE_EXTRA_HEADERS)")
 	fs.String("log.level", defaultLogLevel, "Log level (debug, info, warn) (env.LOG_LEVEL)")
 	fs.String("log.format", defaultLogFormat.String(), "Log format (struct-text, json) (env.LOG_FORMAT)")
 	fs.String("log.file", "", "Log file path; defaults to stdout when empty (env.LOG_FILE)")
@@ -358,6 +365,8 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("mcp.http-proxy", "", "Outbound HTTP proxy for MCP (format <url|env:VAR>)")
 	fs.String("mcp.client-cert", "", "Path to PEM client certificate for MCP mTLS (format <path|env:VAR>) (env.MCP_CLIENT_CERT)")
 	fs.String("mcp.client-key", "", "Path to PEM client private key for MCP mTLS (format <path|env:VAR>) (env.MCP_CLIENT_KEY)")
+	fs.StringArray("mcp.extra-headers", nil, "Static HTTP headers to send to the configured MCP server origin (format 'Key: Value', repeatable; values accept env:VAR or file:/path) (env.MCP_EXTRA_HEADERS)")
+	fs.StringArray("mcp.discovery-extra-headers", nil, "Static HTTP headers to send to MCP discovery/probe requests for the configured MCP server origin (format 'Key: Value', repeatable; values accept env:VAR or file:/path) (env.MCP_DISCOVERY_EXTRA_HEADERS)")
 	fs.Duration("mcp.connection-max-ttl", defaultMCPConnectionMaxTTL, "Maximum lifetime of MCP transport connections (env.MCP_CONNECTION_MAX_TTL)")
 	fs.Int("mcp.max-concurrent-requests", defaultMCPMaxConcurrentRequests, "Maximum number of concurrent requests to the MCP server (env.MCP_MAX_CONCURRENT_REQUESTS)")
 	fs.StringArray("harpoon.target", nil, "Harpoon target mapping (format 'label=...,url=...,desc=...') (env.HARPOON_TARGETS)")
@@ -819,17 +828,21 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 // or via the CONTROL_PLANE_EXTRA_HEADERS environment variable containing a
 // comma- or semicolon-separated list:
 //
-//	CONTROL_PLANE_EXTRA_HEADERS="extra-header: true, debug: 1"
+//	CONTROL_PLANE_EXTRA_HEADERS="extra-header: env:EXTRA_HEADER, debug: 1"
 func buildControlPlaneExtraHeaders(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (map[string]string, error) {
+	return buildExtraHeaders(fs, lookupEnv, "control-plane.extra-headers", "CONTROL_PLANE_EXTRA_HEADERS")
+}
+
+func buildExtraHeaders(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName, envName string) (map[string]string, error) {
 	var raw []string
 
-	if flag := fs.Lookup("control-plane.extra-headers"); flag != nil && flag.Changed {
-		values, err := fs.GetStringArray("control-plane.extra-headers")
+	if flag := fs.Lookup(flagName); flag != nil && flag.Changed {
+		values, err := fs.GetStringArray(flagName)
 		if err != nil {
-			return nil, fmt.Errorf("invalid value for --control-plane.extra-headers: %w", err)
+			return nil, fmt.Errorf("invalid value for --%s: %w", flagName, err)
 		}
 		raw = append(raw, values...)
-	} else if envVal, ok := lookupEnv("CONTROL_PLANE_EXTRA_HEADERS"); ok && envVal != "" {
+	} else if envVal, ok := lookupEnv(envName); ok && envVal != "" {
 		raw = splitHeaderList(envVal)
 	}
 
@@ -837,7 +850,7 @@ func buildControlPlaneExtraHeaders(fs *pflag.FlagSet, lookupEnv func(string) (st
 		return nil, nil
 	}
 
-	return parseHeaderList(raw)
+	return parseHeaderList(raw, lookupEnv, flagName)
 }
 
 func splitHeaderList(raw string) []string {
@@ -854,7 +867,7 @@ func splitHeaderList(raw string) []string {
 	return out
 }
 
-func parseHeaderList(values []string) (map[string]string, error) {
+func parseHeaderList(values []string, lookupEnv func(string) (string, bool), source string) (map[string]string, error) {
 	headers := make(map[string]string, len(values))
 	for _, v := range values {
 		key, val, err := parseHeader(v)
@@ -864,6 +877,11 @@ func parseHeaderList(values []string) (map[string]string, error) {
 		if key == "" {
 			continue
 		}
+		resolvedVal, err := resolveHeaderValue(source+"."+key, val, lookupEnv)
+		if err != nil {
+			return nil, err
+		}
+		val = resolvedVal
 		headers[key] = val
 	}
 	return headers, nil
@@ -884,8 +902,65 @@ func parseHeader(raw string) (string, string, error) {
 	if value == "" {
 		return "", "", fmt.Errorf("invalid header %q: value cannot be empty", raw)
 	}
+	if strings.ContainsAny(value, "\r\n") {
+		return "", "", fmt.Errorf("invalid header %q: value cannot contain CR or LF", raw)
+	}
 
 	return key, value, nil
+}
+
+func resolveHeaderValue(source string, raw string, lookupEnv func(string) (string, bool)) (string, error) {
+	const (
+		envPrefix  = "env:"
+		filePrefix = "file:"
+	)
+	raw = strings.TrimSpace(raw)
+	lower := strings.ToLower(raw)
+	var value string
+	switch {
+	case strings.HasPrefix(lower, envPrefix):
+		name := strings.TrimSpace(raw[len(envPrefix):])
+		if !envNamePattern.MatchString(name) {
+			return "", fmt.Errorf("invalid %s reference %q: environment variable name is invalid", source, raw)
+		}
+		envValue, ok := lookupEnv(name)
+		if !ok {
+			return "", fmt.Errorf("invalid %s reference %q: environment variable %q is not set", source, raw, name)
+		}
+		value = strings.TrimSpace(envValue)
+	case strings.HasPrefix(lower, filePrefix):
+		path := strings.TrimSpace(raw[len(filePrefix):])
+		if path == "" {
+			return "", fmt.Errorf("invalid %s reference %q: file path is required", source, raw)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read %s header value file %s: %w", source, path, err)
+		}
+		value = trimOneTrailingLineEnding(string(data))
+	default:
+		value = raw
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("invalid %s reference %q: resolved value is empty", source, raw)
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return "", fmt.Errorf("invalid %s reference %q: resolved value cannot contain CR or LF", source, raw)
+	}
+	return value, nil
+}
+
+func trimOneTrailingLineEnding(value string) string {
+	switch {
+	case strings.HasSuffix(value, "\r\n"):
+		return strings.TrimSuffix(value, "\r\n")
+	case strings.HasSuffix(value, "\n"):
+		return strings.TrimSuffix(value, "\n")
+	case strings.HasSuffix(value, "\r"):
+		return strings.TrimSuffix(value, "\r")
+	default:
+		return value
+	}
 }
 
 func registerFlagAliases(fs *pflag.FlagSet) {
@@ -1160,6 +1235,14 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), gl
 	if err != nil {
 		return MCPConfig{}, err
 	}
+	extraHeaders, err := buildExtraHeaders(fs, lookupEnv, "mcp.extra-headers", "MCP_EXTRA_HEADERS")
+	if err != nil {
+		return MCPConfig{}, err
+	}
+	discoveryExtraHeaders, err := buildExtraHeaders(fs, lookupEnv, "mcp.discovery-extra-headers", "MCP_DISCOVERY_EXTRA_HEADERS")
+	if err != nil {
+		return MCPConfig{}, err
+	}
 
 	boundHTTPTransportCount := 0
 	for i := range bindings {
@@ -1204,6 +1287,8 @@ func buildMCPConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), gl
 		ChannelBindings:       bindings,
 		ConnectionMaxTTL:      ttl,
 		MaxConcurrentRequests: maxConcurrent,
+		ExtraHeaders:          extraHeaders,
+		DiscoveryExtraHeaders: discoveryExtraHeaders,
 		HTTPProxy:             mcpProxy,
 		HTTPProxySource:       mcpProxySource,
 	}

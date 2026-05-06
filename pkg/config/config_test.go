@@ -42,6 +42,8 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 		"ADMIN_UI_LOG_BUFFER_EVENTS":          "1234",
 		"PID_FILE":                            "/tmp/pid-file",
 		"MCP_SERVER_URL":                      "https://mcp.example",
+		"MCP_EXTRA_HEADERS":                   "X-Internal-Auth: env-static",
+		"MCP_DISCOVERY_EXTRA_HEADERS":         "X-Discovery-Auth: env-discovery",
 		"MCP_CONNECTION_MAX_TTL":              "30s",
 		"MCP_MAX_CONCURRENT_REQUESTS":         "12",
 	}
@@ -93,6 +95,12 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	if cfg.MCP.ServerURL == nil || cfg.MCP.ServerURL.String() != "https://mcp.example" {
 		t.Fatalf("unexpected MCP server URL: %v", cfg.MCP.ServerURL)
 	}
+	if cfg.MCP.ExtraHeaders["X-Internal-Auth"] != "env-static" {
+		t.Fatalf("unexpected MCP extra headers: %#v", cfg.MCP.ExtraHeaders)
+	}
+	if cfg.MCP.DiscoveryExtraHeaders["X-Discovery-Auth"] != "env-discovery" {
+		t.Fatalf("unexpected MCP discovery extra headers: %#v", cfg.MCP.DiscoveryExtraHeaders)
+	}
 	if cfg.MCP.ConnectionMaxTTL != 30*time.Second {
 		t.Fatalf("unexpected MCP connection ttl: %s", cfg.MCP.ConnectionMaxTTL)
 	}
@@ -117,6 +125,8 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 		"ADMIN_UI_LOG_BUFFER_EVENTS":          "111",
 		"PID_FILE":                            "/tmp/env-pid",
 		"MCP_SERVER_URL":                      "https://env-mcp",
+		"MCP_EXTRA_HEADERS":                   "X-Internal-Auth: env-static",
+		"MCP_DISCOVERY_EXTRA_HEADERS":         "X-Discovery-Auth: env-discovery",
 		"MCP_CONNECTION_MAX_TTL":              "45m",
 		"MCP_MAX_CONCURRENT_REQUESTS":         "5",
 	}
@@ -132,6 +142,8 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 		"--admin-ui.log-buffer-events=456",
 		"--pid.file", "/tmp/flag-pid",
 		"--mcp.server-url", "https://flag-mcp",
+		"--mcp.extra-headers", "X-Internal-Auth: flag-static",
+		"--mcp.discovery-extra-headers", "X-Discovery-Auth: flag-discovery",
 		"--control-plane.poll-timeout=5s",
 		"--mcp.connection-max-ttl=15m",
 		"--mcp.max-concurrent-requests=20",
@@ -177,6 +189,12 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 	if cfg.MCP.ServerURL == nil || cfg.MCP.ServerURL.String() != "https://flag-mcp" {
 		t.Fatalf("expected MCP server URL https://flag-mcp, got %v", cfg.MCP.ServerURL)
 	}
+	if cfg.MCP.ExtraHeaders["X-Internal-Auth"] != "flag-static" {
+		t.Fatalf("expected flag MCP extra header, got %#v", cfg.MCP.ExtraHeaders)
+	}
+	if cfg.MCP.DiscoveryExtraHeaders["X-Discovery-Auth"] != "flag-discovery" {
+		t.Fatalf("expected flag MCP discovery extra header, got %#v", cfg.MCP.DiscoveryExtraHeaders)
+	}
 	if cfg.ControlPlane.MaxInFlightRequests != 25 {
 		t.Fatalf("expected max in-flight requests 25, got %d", cfg.ControlPlane.MaxInFlightRequests)
 	}
@@ -192,6 +210,8 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 }
 
 func TestLoadUsesYAMLConfigWhenFlagsAndEnvUnset(t *testing.T) {
+	controlHeaderPath := writeTempSecretFile(t, "yaml-control-header\n")
+	discoveryHeaderPath := writeTempSecretFile(t, "yaml-discovery-from-file\n")
 	configPath := writeTempConfigFile(t, `
 config_version: 1
 control_plane:
@@ -202,6 +222,7 @@ control_plane:
   poll_timeout: 55s
   extra_headers:
     X-Debug-Mode: yaml
+    X-Control-Auth: file:`+controlHeaderPath+`
 log:
   level: warn
   format: json
@@ -223,6 +244,10 @@ mcp:
   commands:
     - channel: tools
       command: python -m tools
+  extra_headers:
+    X-Internal-Auth: env:YAML_MCP_STATIC_HEADER
+  discovery_extra_headers:
+    X-Discovery-Auth: file:`+discoveryHeaderPath+`
   connection_max_ttl: 2m
   max_concurrent_requests: 9
 harpoon:
@@ -239,6 +264,7 @@ proxy:
 
 	cfg, err := Load([]string{"--config", configPath}, lookupEnvMap(map[string]string{
 		"YAML_CONTROL_PLANE_API_KEY": "yaml-control-key",
+		"YAML_MCP_STATIC_HEADER":     "yaml-static-from-env",
 	}))
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
@@ -268,6 +294,9 @@ proxy:
 	if cfg.ControlPlane.ExtraHeaders["X-Debug-Mode"] != "yaml" {
 		t.Fatalf("unexpected extra headers: %#v", cfg.ControlPlane.ExtraHeaders)
 	}
+	if cfg.ControlPlane.ExtraHeaders["X-Control-Auth"] != "yaml-control-header" {
+		t.Fatalf("unexpected resolved control-plane extra headers: %#v", cfg.ControlPlane.ExtraHeaders)
+	}
 	if cfg.Logging.Level != slog.LevelWarn || cfg.Logging.Format != LogFormatJSON || cfg.Logging.File != "/tmp/yaml-log.ndjson" || !cfg.Logging.HTTPRawUnsafe {
 		t.Fatalf("unexpected logging config: %#v", cfg.Logging)
 	}
@@ -285,6 +314,12 @@ proxy:
 	}
 	if cfg.MCP.ConnectionMaxTTL != 2*time.Minute || cfg.MCP.MaxConcurrentRequests != 9 {
 		t.Fatalf("unexpected MCP limits: ttl=%s max=%d", cfg.MCP.ConnectionMaxTTL, cfg.MCP.MaxConcurrentRequests)
+	}
+	if cfg.MCP.ExtraHeaders["X-Internal-Auth"] != "yaml-static-from-env" {
+		t.Fatalf("unexpected MCP extra headers: %#v", cfg.MCP.ExtraHeaders)
+	}
+	if cfg.MCP.DiscoveryExtraHeaders["X-Discovery-Auth"] != "yaml-discovery-from-file" {
+		t.Fatalf("unexpected MCP discovery extra headers: %#v", cfg.MCP.DiscoveryExtraHeaders)
 	}
 	if len(cfg.MCP.ChannelBindings) != 2 {
 		t.Fatalf("expected two MCP channel bindings, got %d", len(cfg.MCP.ChannelBindings))
@@ -1784,6 +1819,150 @@ func TestBuildControlPlaneExtraHeadersFromFlags(t *testing.T) {
 	}
 }
 
+func TestBuildControlPlaneExtraHeadersResolvesEnvAndFileValues(t *testing.T) {
+	t.Parallel()
+
+	headerFile := writeTempSecretFile(t, "file-secret\n")
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	RegisterFlags(fs)
+
+	if err := fs.Parse([]string{
+		`--control-plane.extra-headers`, `X-Env-Auth: env:CONTROL_HEADER_SECRET`,
+		`--control-plane.extra-headers`, `X-File-Auth: file:` + headerFile,
+	}); err != nil {
+		t.Fatalf("flag parse failed: %v", err)
+	}
+
+	headers, err := buildControlPlaneExtraHeaders(fs, lookupEnvMap(map[string]string{
+		"CONTROL_HEADER_SECRET": "env-secret",
+	}))
+	if err != nil {
+		t.Fatalf("buildControlPlaneExtraHeaders returned error: %v", err)
+	}
+	if headers["X-Env-Auth"] != "env-secret" {
+		t.Fatalf("expected X-Env-Auth from env, got %#v", headers)
+	}
+	if headers["X-File-Auth"] != "file-secret" {
+		t.Fatalf("expected X-File-Auth from file, got %#v", headers)
+	}
+}
+
+func TestBuildMCPExtraHeadersFromEnvAndFlags(t *testing.T) {
+	t.Parallel()
+
+	t.Run("env", func(t *testing.T) {
+		t.Parallel()
+		fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+		RegisterFlags(fs)
+		lookup := lookupEnvMap(map[string]string{
+			"MCP_EXTRA_HEADERS":           "X-Internal-Auth: env-static; X-Trace: env-trace",
+			"MCP_DISCOVERY_EXTRA_HEADERS": "X-Discovery-Auth: env-discovery",
+		})
+
+		headers, err := buildExtraHeaders(fs, lookup, "mcp.extra-headers", "MCP_EXTRA_HEADERS")
+		if err != nil {
+			t.Fatalf("build mcp extra headers returned error: %v", err)
+		}
+		if headers["X-Internal-Auth"] != "env-static" || headers["X-Trace"] != "env-trace" {
+			t.Fatalf("unexpected MCP extra headers: %#v", headers)
+		}
+
+		discoveryHeaders, err := buildExtraHeaders(fs, lookup, "mcp.discovery-extra-headers", "MCP_DISCOVERY_EXTRA_HEADERS")
+		if err != nil {
+			t.Fatalf("build mcp discovery extra headers returned error: %v", err)
+		}
+		if discoveryHeaders["X-Discovery-Auth"] != "env-discovery" {
+			t.Fatalf("unexpected MCP discovery extra headers: %#v", discoveryHeaders)
+		}
+	})
+
+	t.Run("flags", func(t *testing.T) {
+		t.Parallel()
+		fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+		RegisterFlags(fs)
+		if err := fs.Parse([]string{
+			`--mcp.extra-headers`, `X-Internal-Auth: flag-static`,
+			`--mcp.extra-headers`, `X-Trace: flag-trace`,
+			`--mcp.discovery-extra-headers`, `X-Discovery-Auth: flag-discovery`,
+		}); err != nil {
+			t.Fatalf("flag parse failed: %v", err)
+		}
+
+		headers, err := buildExtraHeaders(fs, func(string) (string, bool) { return "", false }, "mcp.extra-headers", "MCP_EXTRA_HEADERS")
+		if err != nil {
+			t.Fatalf("build mcp extra headers returned error: %v", err)
+		}
+		if headers["X-Internal-Auth"] != "flag-static" || headers["X-Trace"] != "flag-trace" {
+			t.Fatalf("unexpected MCP extra headers: %#v", headers)
+		}
+
+		discoveryHeaders, err := buildExtraHeaders(fs, func(string) (string, bool) { return "", false }, "mcp.discovery-extra-headers", "MCP_DISCOVERY_EXTRA_HEADERS")
+		if err != nil {
+			t.Fatalf("build mcp discovery extra headers returned error: %v", err)
+		}
+		if discoveryHeaders["X-Discovery-Auth"] != "flag-discovery" {
+			t.Fatalf("unexpected MCP discovery extra headers: %#v", discoveryHeaders)
+		}
+	})
+}
+
+func TestBuildMCPExtraHeadersResolvesEnvFileAndRejectsInvalidReferences(t *testing.T) {
+	t.Parallel()
+
+	t.Run("envAndFile", func(t *testing.T) {
+		t.Parallel()
+		headerFile := writeTempSecretFile(t, "discovery-file-secret\n")
+		fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+		RegisterFlags(fs)
+		lookup := lookupEnvMap(map[string]string{
+			"MCP_EXTRA_HEADERS":           "X-Internal-Auth: env:MCP_RUNTIME_SECRET",
+			"MCP_DISCOVERY_EXTRA_HEADERS": "X-Discovery-Auth: file:" + headerFile,
+			"MCP_RUNTIME_SECRET":          "runtime-env-secret",
+		})
+
+		headers, err := buildExtraHeaders(fs, lookup, "mcp.extra-headers", "MCP_EXTRA_HEADERS")
+		if err != nil {
+			t.Fatalf("build mcp extra headers returned error: %v", err)
+		}
+		if headers["X-Internal-Auth"] != "runtime-env-secret" {
+			t.Fatalf("unexpected MCP extra headers: %#v", headers)
+		}
+
+		discoveryHeaders, err := buildExtraHeaders(fs, lookup, "mcp.discovery-extra-headers", "MCP_DISCOVERY_EXTRA_HEADERS")
+		if err != nil {
+			t.Fatalf("build mcp discovery extra headers returned error: %v", err)
+		}
+		if discoveryHeaders["X-Discovery-Auth"] != "discovery-file-secret" {
+			t.Fatalf("unexpected MCP discovery extra headers: %#v", discoveryHeaders)
+		}
+	})
+
+	t.Run("missingEnv", func(t *testing.T) {
+		t.Parallel()
+		fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+		RegisterFlags(fs)
+		lookup := lookupEnvMap(map[string]string{
+			"MCP_EXTRA_HEADERS": "X-Internal-Auth: env:MISSING_MCP_SECRET",
+		})
+		if _, err := buildExtraHeaders(fs, lookup, "mcp.extra-headers", "MCP_EXTRA_HEADERS"); err == nil {
+			t.Fatalf("expected missing env reference error")
+		}
+	})
+
+	t.Run("fileWithExtraNewline", func(t *testing.T) {
+		t.Parallel()
+		headerFile := writeTempSecretFile(t, "secret\nsecond-line\n")
+		fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+		RegisterFlags(fs)
+		lookup := lookupEnvMap(map[string]string{
+			"MCP_EXTRA_HEADERS": "X-Internal-Auth: file:" + headerFile,
+		})
+		if _, err := buildExtraHeaders(fs, lookup, "mcp.extra-headers", "MCP_EXTRA_HEADERS"); err == nil {
+			t.Fatalf("expected CR/LF rejection for resolved file value")
+		}
+	})
+}
+
 func TestParseProxyReference(t *testing.T) {
 	t.Run("envReference", func(t *testing.T) {
 		t.Parallel()
@@ -1962,6 +2141,15 @@ func writeTempConfigFile(t *testing.T, contents string) string {
 	path := filepath.Join(t.TempDir(), "tunnel-client.yaml")
 	if err := os.WriteFile(path, []byte(strings.TrimSpace(contents)+"\n"), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
+	}
+	return path
+}
+
+func writeTempSecretFile(t *testing.T, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
 	}
 	return path
 }

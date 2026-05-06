@@ -226,11 +226,48 @@ func validateFileConfigSyntax(c fileConfig) error {
 			return err
 		}
 	}
+	if err := validateHeaderReferenceSyntax("control_plane.extra_headers", c.ControlPlane.ExtraHeaders); err != nil {
+		return err
+	}
+	if err := validateHeaderReferenceSyntax("mcp.extra_headers", c.MCP.ExtraHeaders); err != nil {
+		return err
+	}
+	if err := validateHeaderReferenceSyntax("mcp.discovery_extra_headers", c.MCP.DiscoveryExtraHeaders); err != nil {
+		return err
+	}
 	if _, err := formatMCPServerURLEntries(c.MCP.ServerURLs); err != nil {
 		return err
 	}
 	if _, err := formatMCPCommandEntries(c.MCP.Commands); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateHeaderReferenceSyntax(source string, headers map[string]string) error {
+	for key, value := range headers {
+		headerSource := source + "." + key
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("%s key cannot be empty", source)
+		}
+		if err := validateHeaderValueReferenceSyntax(headerSource, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateHeaderValueReferenceSyntax(source string, raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("%s cannot be empty", source)
+	}
+	if strings.ContainsAny(raw, "\r\n") {
+		return fmt.Errorf("%s cannot contain CR or LF", source)
+	}
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "env:") || strings.HasPrefix(lower, "file:") {
+		return validateSecretReferenceSyntax(source, raw)
 	}
 	return nil
 }

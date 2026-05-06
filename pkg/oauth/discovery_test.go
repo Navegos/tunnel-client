@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"go.openai.org/api/tunnel-client/pkg/headerscope"
 )
 
 func TestFetchOAuthMetadataFallsBackToRoot(t *testing.T) {
@@ -404,6 +406,34 @@ func TestFetchOAuthMetadataRetriesTimeoutWithIncreasingRequestTimeout(t *testing
 	require.Len(t, retryDeadlines, oauthMetadataRequestRetryCount)
 	require.True(t, retryDeadlines[1].After(retryDeadlines[0]), "second retry deadline should be later than first")
 	require.True(t, retryDeadlines[2].After(retryDeadlines[1]), "third retry deadline should be later than second")
+}
+
+func TestFetchOAuthMetadataTimeoutRetriesPreserveDiscoveryContext(t *testing.T) {
+	t.Parallel()
+
+	targetURL, err := url.Parse("https://mcp.example.test/.well-known/oauth-protected-resource")
+	require.NoError(t, err)
+
+	var discoveryContexts []bool
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			discoveryContexts = append(discoveryContexts, headerscope.IsMCPDiscovery(req.Context()))
+			return nil, context.DeadlineExceeded
+		}),
+		Timeout: 30 * time.Second,
+	}
+
+	_, _, _, fetchErr := FetchOAuthMetadata(
+		context.Background(),
+		client,
+		[]DiscoveryCandidate{{URL: targetURL, Source: DiscoverySourceWellKnownRoot}},
+		nil,
+	)
+	require.Error(t, fetchErr)
+	require.Len(t, discoveryContexts, 1+oauthMetadataRequestRetryCount)
+	for _, isDiscovery := range discoveryContexts {
+		require.True(t, isDiscovery)
+	}
 }
 
 func TestValidateProtectedResourceMetadataUsesAuthorizationServerIndexZero(t *testing.T) {

@@ -12,6 +12,8 @@ func TestLoadAcceptsCommonKebabCaseAliases(t *testing.T) {
 	cfg, err := Load([]string{
 		"--control-plane-tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
 		"--mcp-server-url", "channel=main,url=https://mcp.example/mcp",
+		"--mcp-extra-headers", "X-Internal-Auth: alias-static",
+		"--mcp-discovery-extra-headers", "X-Discovery-Auth: alias-discovery",
 	}, lookupEnvMap(map[string]string{
 		"CONTROL_PLANE_API_KEY": "control-key",
 	}))
@@ -23,6 +25,12 @@ func TestLoadAcceptsCommonKebabCaseAliases(t *testing.T) {
 	}
 	if binding := cfg.MCP.MainChannelBinding(); binding == nil || binding.ServerURL == nil || binding.ServerURL.String() != "https://mcp.example/mcp" {
 		t.Fatalf("unexpected main MCP binding: %#v", binding)
+	}
+	if cfg.MCP.ExtraHeaders["X-Internal-Auth"] != "alias-static" {
+		t.Fatalf("unexpected mcp extra headers: %#v", cfg.MCP.ExtraHeaders)
+	}
+	if cfg.MCP.DiscoveryExtraHeaders["X-Discovery-Auth"] != "alias-discovery" {
+		t.Fatalf("unexpected mcp discovery extra headers: %#v", cfg.MCP.DiscoveryExtraHeaders)
 	}
 }
 

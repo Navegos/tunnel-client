@@ -293,6 +293,8 @@ func TestCollectLogExportRuntimeKeepsReproMetadataAndRedactsSecrets(t *testing.T
 			"https://example.test/mcp?code=secret-code",
 			"--harpoon.target=url=https://target.test?access_token=target-token",
 			"--control-plane.extra-headers=X-Tunnel-Shard-Token: shard-secret",
+			"--mcp.extra-headers=X-Internal-Auth: env:MCP_RUNTIME_SECRET",
+			"--mcp.discovery-extra-headers=X-Discovery-Auth: file:/run/secrets/mcp-discovery-header",
 			"--admin-token",
 			"literal-admin-token",
 			"--unrelated",
@@ -302,6 +304,9 @@ func TestCollectLogExportRuntimeKeepsReproMetadataAndRedactsSecrets(t *testing.T
 			"CONTROL_PLANE_TUNNEL_ID=tunnel_0123456789abcdef0123456789abcdef",
 			"LOG_LEVEL=debug",
 			"MCP_SERVER_URL=https://env.example/mcp",
+			"CONTROL_PLANE_EXTRA_HEADERS=X-Control-Auth: env:CONTROL_HEADER_SECRET",
+			"MCP_EXTRA_HEADERS=X-Internal-Auth: env-runtime-secret",
+			"MCP_DISCOVERY_EXTRA_HEADERS=X-Discovery-Auth: env-discovery-secret",
 			"HTTPS_PROXY=http://proxy-user:proxy-pass@proxy.example:8080",
 			"OPENAI_TUNNEL_KEY_PROD=sk-proj-env-secret123456",
 			"UNRELATED_SECRET=should-not-be-exported-because-not-relevant",
@@ -312,6 +317,10 @@ func TestCollectLogExportRuntimeKeepsReproMetadataAndRedactsSecrets(t *testing.T
 	require.Contains(t, got.Argv, "https://example.test/mcp?code=[REDACTED]")
 	require.Contains(t, got.Argv, "--harpoon.target=url=https://target.test?access_token=[REDACTED]")
 	require.Contains(t, got.Argv, "--control-plane.extra-headers=X-Tunnel-Shard-Token: [REDACTED]")
+	require.Contains(t, got.Argv, "--mcp.extra-headers=X-Internal-Auth: [REDACTED]")
+	require.Contains(t, got.Argv, "--mcp.discovery-extra-headers=X-Discovery-Auth: [REDACTED]")
+	require.NotContains(t, got.Argv, "MCP_RUNTIME_SECRET")
+	require.NotContains(t, got.Argv, "/run/secrets/mcp-discovery-header")
 	require.Contains(t, got.Argv, "[REDACTED]")
 	require.Contains(t, got.Argv, "sk-REDACTED")
 	require.NotContains(t, got.Argv, "literal-admin-token")
@@ -320,6 +329,9 @@ func TestCollectLogExportRuntimeKeepsReproMetadataAndRedactsSecrets(t *testing.T
 	require.Equal(t, "tunnel_0123456789abcdef0123456789abcdef", got.Environment["CONTROL_PLANE_TUNNEL_ID"])
 	require.Equal(t, "debug", got.Environment["LOG_LEVEL"])
 	require.Equal(t, "https://env.example/mcp", got.Environment["MCP_SERVER_URL"])
+	require.Equal(t, "X-Control-Auth: [REDACTED]", got.Environment["CONTROL_PLANE_EXTRA_HEADERS"])
+	require.Equal(t, "X-Internal-Auth: [REDACTED]", got.Environment["MCP_EXTRA_HEADERS"])
+	require.Equal(t, "X-Discovery-Auth: [REDACTED]", got.Environment["MCP_DISCOVERY_EXTRA_HEADERS"])
 	require.Equal(t, "http://[REDACTED]@proxy.example:8080", got.Environment["HTTPS_PROXY"])
 	require.Equal(t, "[REDACTED]", got.Environment["OPENAI_TUNNEL_KEY_PROD"])
 	require.NotContains(t, got.Environment, "UNRELATED_SECRET")
@@ -354,6 +366,8 @@ func TestRuntimeSnapshotProviderIncludesRedactedEffectiveConfig(t *testing.T) {
 			TransportKind:         config.MCPTransportHTTPStreamable,
 			ConnectionMaxTTL:      time.Minute,
 			MaxConcurrentRequests: 5,
+			ExtraHeaders:          map[string]string{"X-Internal-Auth": "runtime-secret"},
+			DiscoveryExtraHeaders: map[string]string{"X-Discovery-Auth": "discovery-secret"},
 			ChannelBindings: []config.MCPChannelBinding{
 				{
 					Channel:       types.DefaultChannel,
@@ -378,7 +392,11 @@ func TestRuntimeSnapshotProviderIncludesRedactedEffectiveConfig(t *testing.T) {
 	require.NotContains(t, files[runtimeSnapshotFile], "sk-proj-control-secret123456")
 	require.NotContains(t, files[runtimeSnapshotFile], "secret-token")
 	require.NotContains(t, files[runtimeSnapshotFile], "secret-shard-token")
+	require.NotContains(t, files[runtimeSnapshotFile], "runtime-secret")
+	require.NotContains(t, files[runtimeSnapshotFile], "discovery-secret")
 	require.Contains(t, files[runtimeSnapshotFile], "api_key: '[REDACTED]'")
+	require.Contains(t, files[runtimeSnapshotFile], "X-Internal-Auth: '[REDACTED]'")
+	require.Contains(t, files[runtimeSnapshotFile], "X-Discovery-Auth: '[REDACTED]'")
 	require.Contains(t, files[runtimeSnapshotFile], "https://mcp.example/mcp")
 }
 
@@ -395,8 +413,15 @@ control_plane:
   extra_headers:
     Authorization: Bearer config-bearer
     X-Tunnel-Shard-Token: config-shard-token
+    X-Control-Env-Ref: env:CONTROL_HEADER_SECRET
     X-Debug: safe-value
 mcp:
+  extra_headers:
+    X-Internal-Auth: mcp-runtime-secret
+    X-Internal-Ref: env:MCP_HEADER_SECRET
+  discovery_extra_headers:
+    X-Discovery-Auth: mcp-discovery-secret
+    X-Discovery-Ref: file:/run/secrets/mcp-discovery-header
   server_urls:
     - channel: main
       url: https://bob:secret@mcp.example/mcp?code=mcp-code
@@ -428,10 +453,15 @@ mcp:
 	require.Contains(t, runtimeYAML, "base_url: https://api.example/v1")
 	require.Contains(t, runtimeYAML, "url: https://mcp.example/mcp")
 	require.Contains(t, runtimeYAML, "client_cert: /tmp/client.crt")
-	require.Contains(t, runtimeYAML, "X-Debug: safe-value")
+	require.Contains(t, runtimeYAML, "X-Debug: '[REDACTED]'")
 	require.Contains(t, runtimeYAML, "api_key: '[REDACTED]'")
 	require.Contains(t, runtimeYAML, "Authorization: '[REDACTED]'")
 	require.Contains(t, runtimeYAML, "X-Tunnel-Shard-Token: '[REDACTED]'")
+	require.Contains(t, runtimeYAML, "X-Control-Env-Ref: '[REDACTED]'")
+	require.Contains(t, runtimeYAML, "X-Internal-Auth: '[REDACTED]'")
+	require.Contains(t, runtimeYAML, "X-Internal-Ref: '[REDACTED]'")
+	require.Contains(t, runtimeYAML, "X-Discovery-Auth: '[REDACTED]'")
+	require.Contains(t, runtimeYAML, "X-Discovery-Ref: '[REDACTED]'")
 	require.Contains(t, runtimeYAML, "client_key: '[REDACTED]'")
 	require.Contains(t, runtimeYAML, "python -m tools --api-key sk-REDACTED")
 	require.NotContains(t, runtimeYAML, "alice:secret")
@@ -441,6 +471,12 @@ mcp:
 	require.NotContains(t, runtimeYAML, "config-secret")
 	require.NotContains(t, runtimeYAML, "config-bearer")
 	require.NotContains(t, runtimeYAML, "config-shard-token")
+	require.NotContains(t, runtimeYAML, "safe-value")
+	require.NotContains(t, runtimeYAML, "mcp-runtime-secret")
+	require.NotContains(t, runtimeYAML, "mcp-discovery-secret")
+	require.NotContains(t, runtimeYAML, "CONTROL_HEADER_SECRET")
+	require.NotContains(t, runtimeYAML, "MCP_HEADER_SECRET")
+	require.NotContains(t, runtimeYAML, "/run/secrets/mcp-discovery-header")
 	require.NotContains(t, runtimeYAML, "client.key")
 	require.NotContains(t, runtimeYAML, "command-secret")
 }

@@ -82,13 +82,13 @@ func (f *ChannelTransportFactory) HTTPClientForBinding(binding config.MCPChannel
 		transportKind = config.MCPTransportHTTPStreamable
 	}
 	if transportKind != config.MCPTransportHTTPStreamable {
-		return f.httpClientForKey("default", nil, nil)
+		return f.httpClientForKey("default", nil, nil, nil)
 	}
 	channelName := binding.Channel.Canonical()
 	if channelName == "" {
 		return nil, fmt.Errorf("mcpclient: invalid channel name")
 	}
-	return f.httpClientForKey(channelName.String(), binding.HTTPProxy, binding.ClientCertificate)
+	return f.httpClientForKey(channelName.String(), binding.ServerURL, binding.HTTPProxy, binding.ClientCertificate)
 }
 
 // Build returns a cached transport for the requested binding. Concurrent first
@@ -171,7 +171,7 @@ func (f *ChannelTransportFactory) decorateTransport(base mcp.Transport) mcp.Tran
 	}
 }
 
-func (f *ChannelTransportFactory) httpClientForKey(key string, proxyURL *url.URL, clientCertificate *tlsconfig.ClientCertificate) (*http.Client, error) {
+func (f *ChannelTransportFactory) httpClientForKey(key string, serverURL *url.URL, proxyURL *url.URL, clientCertificate *tlsconfig.ClientCertificate) (*http.Client, error) {
 	f.mu.Lock()
 	if client, ok := f.httpClients[key]; ok {
 		f.mu.Unlock()
@@ -185,7 +185,7 @@ func (f *ChannelTransportFactory) httpClientForKey(key string, proxyURL *url.URL
 			return client, nil
 		}
 		f.mu.Unlock()
-		transport, err := buildMcpHTTPTransport(f.logger, f.logging, f.meterProvider, f.tlsBundle, clientCertificate, proxyURL)
+		transport, err := buildMcpHTTPTransport(f.logger, f.logging, f.meterProvider, f.tlsBundle, clientCertificate, proxyURL, serverURL, f.config.ExtraHeaders, f.config.DiscoveryExtraHeaders)
 		if err != nil {
 			return nil, err
 		}

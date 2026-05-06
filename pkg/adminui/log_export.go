@@ -443,6 +443,9 @@ func splitLongFlag(arg string) (name string, value string, hasValue bool) {
 }
 
 func redactRuntimeArgValue(key string, value string) string {
+	if isHeaderListKey(key) {
+		return redactHeaderListValue(value)
+	}
 	if isSensitiveRuntimeKey(key) && !isReferenceValue(value) {
 		return "[REDACTED]"
 	}
@@ -450,6 +453,9 @@ func redactRuntimeArgValue(key string, value string) string {
 }
 
 func redactRuntimeEnv(key string, value string) string {
+	if isHeaderListKey(key) {
+		return redactHeaderListValue(value)
+	}
 	if isSensitiveRuntimeKey(key) {
 		return "[REDACTED]"
 	}
@@ -479,6 +485,9 @@ func buildConfigFileSnapshot(cfg *config.Config) *logExportConfigFileSnapshot {
 }
 
 func redactConfigFileValue(key string, v any) any {
+	if isHeaderListKey(key) {
+		return redactHeaderConfigValue(v)
+	}
 	if isSensitiveRuntimeKey(key) {
 		if s, ok := v.(string); ok && isSafeReferenceValue(s) {
 			return redactSnapshotString(s)
@@ -513,6 +522,33 @@ func redactConfigFileValue(key string, v any) any {
 	}
 }
 
+func redactHeaderConfigValue(v any) any {
+	switch t := v.(type) {
+	case string:
+		return redactHeaderListValue(t)
+	case []any:
+		out := make([]any, 0, len(t))
+		for _, item := range t {
+			out = append(out, redactHeaderConfigValue(item))
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for key := range t {
+			out[key] = "[REDACTED]"
+		}
+		return out
+	case map[any]any:
+		out := make(map[string]any, len(t))
+		for key := range t {
+			out[fmt.Sprint(key)] = "[REDACTED]"
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 func buildEffectiveConfigSnapshot(cfg *config.Config) map[string]any {
 	if cfg == nil {
 		return nil
@@ -531,7 +567,7 @@ func buildEffectiveConfigSnapshot(cfg *config.Config) map[string]any {
 			"api_key":               redactedPresence(cfg.ControlPlane.APIKey),
 			"max_inflight_requests": cfg.ControlPlane.MaxInFlightRequests,
 			"poll_timeout":          cfg.ControlPlane.PollTimeout.String(),
-			"extra_headers":         redactStringMap(cfg.ControlPlane.ExtraHeaders),
+			"extra_headers":         redactHeaderMap(cfg.ControlPlane.ExtraHeaders),
 			"http_proxy":            urlForSnapshot(cfg.ControlPlane.HTTPProxy),
 			"http_proxy_source":     string(cfg.ControlPlane.HTTPProxySource),
 			"poll_backoff_min":      durationForSnapshot(cfg.ControlPlane.PollBackoffMin),
@@ -563,6 +599,8 @@ func buildEffectiveConfigSnapshot(cfg *config.Config) map[string]any {
 			"client_certificate":      clientCertificateSnapshot(cfg.MCP.ClientCertificate),
 			"connection_max_ttl":      cfg.MCP.ConnectionMaxTTL.String(),
 			"max_concurrent_requests": cfg.MCP.MaxConcurrentRequests,
+			"extra_headers":           redactHeaderMap(cfg.MCP.ExtraHeaders),
+			"discovery_extra_headers": redactHeaderMap(cfg.MCP.DiscoveryExtraHeaders),
 			"http_proxy":              urlForSnapshot(cfg.MCP.HTTPProxy),
 			"http_proxy_source":       string(cfg.MCP.HTTPProxySource),
 			"channel_bindings":        mcpBindingSnapshots(cfg.MCP.ChannelBindings),
@@ -616,17 +654,13 @@ func redactedPresence(value string) string {
 	return "[REDACTED]"
 }
 
-func redactStringMap(values map[string]string) map[string]string {
+func redactHeaderMap(values map[string]string) map[string]string {
 	if len(values) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(values))
-	for key, value := range values {
-		if isSensitiveRuntimeKey(key) {
-			out[key] = "[REDACTED]"
-			continue
-		}
-		out[key] = redactString(value)
+	for key := range values {
+		out[key] = "[REDACTED]"
 	}
 	return out
 }
@@ -706,6 +740,42 @@ func isReferenceValue(value string) bool {
 
 func isSafeReferenceValue(value string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "env:")
+}
+
+func isHeaderListKey(key string) bool {
+	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimLeft(key, "-")))
+	return strings.HasSuffix(normalized, "extra_headers") || strings.HasSuffix(normalized, "extra_header")
+}
+
+func redactHeaderListValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return value
+	}
+	separator := ", "
+	if strings.Contains(value, ";") {
+		separator = "; "
+	}
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key, _, ok := strings.Cut(part, ":")
+		if !ok || strings.TrimSpace(key) == "" {
+			out = append(out, redactString(part))
+			continue
+		}
+		out = append(out, strings.TrimSpace(key)+": [REDACTED]")
+	}
+	if len(out) == 0 {
+		return redactString(value)
+	}
+	return strings.Join(out, separator)
 }
 
 func isSensitiveRuntimeKey(key string) bool {

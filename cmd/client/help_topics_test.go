@@ -46,6 +46,23 @@ func TestRootHelpDoesNotExposeLegacySessionsCommand(t *testing.T) {
 	require.NotContains(t, stdout.String(), "sessions")
 }
 
+func TestRootHelpCoversMCPStaticHeaders(t *testing.T) {
+	t.Parallel()
+
+	var stdout strings.Builder
+	root := newRootCommand(func(string) (string, bool) { return "", false }, &stdout, &strings.Builder{})
+	root.SetArgs([]string{"run", "--help"})
+
+	require.NoError(t, root.Execute())
+	require.Contains(t, stdout.String(), "--mcp.extra-headers")
+	require.Contains(t, stdout.String(), "MCP_EXTRA_HEADERS")
+	require.Contains(t, stdout.String(), "--mcp.discovery-extra-headers")
+	require.Contains(t, stdout.String(), "MCP_DISCOVERY_EXTRA_HEADERS")
+	require.Contains(t, stdout.String(), "values accept env:VAR or file:/path")
+	require.Contains(t, stdout.String(), "--control-plane.extra-headers")
+	require.Contains(t, stdout.String(), "CONTROL_PLANE_EXTRA_HEADERS")
+}
+
 func TestTroubleshootingHelpTopicIsDiscoverable(t *testing.T) {
 	t.Parallel()
 

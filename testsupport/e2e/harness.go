@@ -447,6 +447,18 @@ func (h *Harness) cloneConfig() *config.Config {
 	clone.Health = h.cfg.Health
 	clone.Process = h.cfg.Process
 	clone.MCP = h.cfg.MCP
+	if h.cfg.MCP.ExtraHeaders != nil {
+		clone.MCP.ExtraHeaders = make(map[string]string, len(h.cfg.MCP.ExtraHeaders))
+		for k, v := range h.cfg.MCP.ExtraHeaders {
+			clone.MCP.ExtraHeaders[k] = v
+		}
+	}
+	if h.cfg.MCP.DiscoveryExtraHeaders != nil {
+		clone.MCP.DiscoveryExtraHeaders = make(map[string]string, len(h.cfg.MCP.DiscoveryExtraHeaders))
+		for k, v := range h.cfg.MCP.DiscoveryExtraHeaders {
+			clone.MCP.DiscoveryExtraHeaders[k] = v
+		}
+	}
 	clone.AdminUI = h.cfg.AdminUI
 	clone.Harpoon = h.cfg.Harpoon
 	clone.TLS = h.cfg.TLS

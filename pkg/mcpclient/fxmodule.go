@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/headerscope"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	tcmetrics "go.openai.org/api/tunnel-client/pkg/metrics"
 	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
@@ -158,6 +159,7 @@ func probeMcpServer(p runnerParams) error {
 					ctx,
 					defaultProbeTimeout,
 					func(probeCtx context.Context) (probeSession, error) {
+						probeCtx = headerscope.WithMCPDiscovery(probeCtx)
 						return p.Client.Connect(probeCtx, p.Transport, nil)
 					},
 					logger,
@@ -258,11 +260,12 @@ func (w slogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig, meterProvider *sdkmetric.MeterProvider, tlsBundle *tlsconfig.Bundle, clientCertificate *tlsconfig.ClientCertificate, proxyURL *url.URL) (http.RoundTripper, error) {
+func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig, meterProvider *sdkmetric.MeterProvider, tlsBundle *tlsconfig.Bundle, clientCertificate *tlsconfig.ClientCertificate, proxyURL *url.URL, serverURL *url.URL, extraHeaders map[string]string, discoveryExtraHeaders map[string]string) (http.RoundTripper, error) {
 	// Order matters (outermost to innermost):
-	//   1. Forwarding injects headers before anything else touches the request.
-	//   2. Logging wraps otel instrumentation so raw dumps include forwarded headers.
-	//   3. otelhttp instrumentation sits closest to the network to record final calls.
+	//   1. Static headers apply operator headers to the configured MCP origin.
+	//   2. Forwarding injects per-request connector headers last so they win conflicts.
+	//   3. Logging wraps otel instrumentation so raw dumps include final headers.
+	//   4. otelhttp instrumentation sits closest to the network to record final calls.
 	base, err := tctransport.CloneDefaultWithBundle(tlsBundle)
 	if err != nil {
 		return nil, fmt.Errorf("mcpclient: %w", err)
@@ -285,7 +288,8 @@ func buildMcpHTTPTransport(logger *slog.Logger, loggingCfg *config.LoggingConfig
 		slog.String("transport", "forwarding_rt"),
 	)
 	base = tclog.NewRoundTripper(base, forwardingLogger, loggingCfg, tclog.ComponentMcpClient)
-	return internal.NewForwardingRoundTripper(base), nil
+	base = internal.NewForwardingRoundTripper(base)
+	return internal.NewStaticHeadersRoundTripper(base, serverURL, extraHeaders, discoveryExtraHeaders), nil
 }
 
 func transportTargetLabel(kind config.MCPTransportKind, serverURL *url.URL) string {

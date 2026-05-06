@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"go.openai.org/api/tunnel-client/pkg/headerscope"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
 
@@ -199,6 +200,7 @@ func tryWWWAuthenticateProbe(
 	if err != nil {
 		return nil, fmt.Errorf("oauth discovery: build WWW-Authenticate probe %s: %v", method, err)
 	}
+	req = req.WithContext(headerscope.WithMCPDiscovery(req.Context()))
 	req.Header.Set("User-Agent", version.UserAgent)
 	req.Header.Set("Accept", "application/json")
 

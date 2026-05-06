@@ -86,6 +86,13 @@ type ReceivedResponse struct {
 	MatchedCommand  bool
 }
 
+// IncomingHTTPRequest captures an HTTP request received by the mock tunnel service.
+type IncomingHTTPRequest struct {
+	Method  string
+	Path    string
+	Headers http.Header
+}
+
 // CommandMutator can modify a command payload before it is delivered to the client.
 type CommandMutator func(json.RawMessage, SharedStorage) json.RawMessage
 
@@ -202,6 +209,7 @@ type MockTunnelService struct {
 	mu                  sync.Mutex
 	script              []*scriptedCommand
 	received            []ReceivedResponse
+	httpSeen            []IncomingHTTPRequest
 	delivered           []json.RawMessage
 	stateCh             chan struct{}
 	pollWaitLimit       time.Duration
@@ -534,6 +542,38 @@ func (m *MockTunnelService) ReceivedResponses(filter ResponseMatchFilter) []Rece
 	return out
 }
 
+// ReceivedHTTPRequests returns all HTTP requests observed by the mock tunnel service.
+func (m *MockTunnelService) ReceivedHTTPRequests() []IncomingHTTPRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]IncomingHTTPRequest, len(m.httpSeen))
+	for i, req := range m.httpSeen {
+		out[i] = IncomingHTTPRequest{
+			Method:  req.Method,
+			Path:    req.Path,
+			Headers: cloneHeader(req.Headers),
+		}
+	}
+	return out
+}
+
+func (m *MockTunnelService) recordHTTPRequest(req *http.Request) {
+	if m == nil || req == nil {
+		return
+	}
+	path := ""
+	if req.URL != nil {
+		path = req.URL.Path
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.httpSeen = append(m.httpSeen, IncomingHTTPRequest{
+		Method:  req.Method,
+		Path:    path,
+		Headers: req.Header.Clone(),
+	})
+}
+
 // DeliveredCommands returns a snapshot of all commands that have been issued to clients.
 func (m *MockTunnelService) DeliveredCommands() []json.RawMessage {
 	m.mu.Lock()
@@ -571,6 +611,7 @@ func (m *MockTunnelService) SharedStorageSnapshot() map[string]string {
 }
 
 func (m *MockTunnelService) handleTunnel(w http.ResponseWriter, r *http.Request) {
+	m.recordHTTPRequest(r)
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/poll"):
 		m.handlePoll(w, r)

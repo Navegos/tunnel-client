@@ -59,6 +59,14 @@ type IncomingRequest struct {
 	Headers   http.Header
 }
 
+// IncomingHTTPRequest captures an HTTP request received by the mock server.
+type IncomingHTTPRequest struct {
+	Method  string
+	Path    string
+	Headers http.Header
+	Body    []byte
+}
+
 // MockMCPServer hosts a Streamable HTTP MCP server backed by scripted tool handlers.
 type Option func(*MockMCPServer)
 
@@ -107,6 +115,32 @@ func WithWWWAuthenticateProbe() Option {
 	}
 }
 
+// WithProtectedResourceMetadata sets the metadata returned by the well-known
+// OAuth Protected Resource Metadata endpoint.
+func WithProtectedResourceMetadata(meta oauthex.ProtectedResourceMetadata) Option {
+	return func(m *MockMCPServer) {
+		m.enableOAuth = true
+		copyMeta := meta
+		m.oauthMetadata = &copyMeta
+	}
+}
+
+// WithRequiredHeader requires every HTTP request to carry name: value.
+func WithRequiredHeader(name, value string) Option {
+	return WithRequiredHeaderFor(name, value, nil)
+}
+
+// WithRequiredHeaderFor requires matching HTTP requests to carry name: value.
+func WithRequiredHeaderFor(name, value string, predicate func(*http.Request) bool) Option {
+	return func(m *MockMCPServer) {
+		m.requiredHeaders = append(m.requiredHeaders, requiredHeader{
+			name:      name,
+			value:     value,
+			predicate: predicate,
+		})
+	}
+}
+
 // WithToolListChangedNotificationsDisabled disables tool list changed notifications.
 func WithToolListChangedNotificationsDisabled() Option {
 	return func(m *MockMCPServer) {
@@ -129,6 +163,7 @@ type MockMCPServer struct {
 	mu       sync.Mutex
 	calls    []*Call
 	received []IncomingRequest
+	httpSeen []IncomingHTTPRequest
 	requests chan struct{}
 
 	server     *mcp.Server
@@ -148,12 +183,19 @@ type MockMCPServer struct {
 
 	injectKeepalivePings bool
 
-	oauthMetadata *oauthex.ProtectedResourceMetadata
-	serverOptions *mcp.ServerOptions
+	oauthMetadata   *oauthex.ProtectedResourceMetadata
+	serverOptions   *mcp.ServerOptions
+	requiredHeaders []requiredHeader
 
 	useTLS bool
 
 	tb atomic.Value // testing.TB
+}
+
+type requiredHeader struct {
+	name      string
+	value     string
+	predicate func(*http.Request) bool
 }
 
 var stdioLock sync.Mutex
@@ -207,22 +249,15 @@ func (m *MockMCPServer) Start(t testing.TB) {
 	}
 
 	httpHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost {
+			m.recordHTTPRequest(req, nil)
+			if !m.checkRequiredHeaders(w, req) {
+				return
+			}
+		}
 		if m.enableOAuth && req.URL.Path == wellKnownOAuthProtectedResourcePath {
 			m.serveProtectedResourceMetadata(w, req)
 			return
-		}
-		if m.wwwAuthProbe && req.Method == http.MethodPost && req.Header.Get("Authorization") == "" {
-			body, err := io.ReadAll(req.Body)
-			if err != nil {
-				m.failf("mock MCP server read body: %v", err)
-			}
-			_ = req.Body.Close()
-			req.Body = io.NopCloser(bytes.NewReader(body))
-			if len(body) == 0 && m.wwwAuthURL != "" {
-				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s"`, m.wwwAuthURL))
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
 		}
 		if req.Method == http.MethodPost {
 			body, err := io.ReadAll(req.Body)
@@ -230,6 +265,16 @@ func (m *MockMCPServer) Start(t testing.TB) {
 				m.failf("mock MCP server read body: %v", err)
 			}
 			_ = req.Body.Close()
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			m.recordHTTPRequest(req, body)
+			if !m.checkRequiredHeaders(w, req) {
+				return
+			}
+			if m.wwwAuthProbe && req.Header.Get("Authorization") == "" && len(body) == 0 && m.wwwAuthURL != "" {
+				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s"`, m.wwwAuthURL))
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			var methodProbe struct {
 				Method string `json:"method"`
 			}
@@ -276,7 +321,7 @@ func (m *MockMCPServer) Start(t testing.TB) {
 	m.server = server
 	m.httpServer = httpServer
 	m.baseURL = parsed
-	if m.enableOAuth {
+	if m.enableOAuth && m.oauthMetadata == nil {
 		if meta := m.buildProtectedResourceMetadata(parsed); meta != nil {
 			m.oauthMetadata = meta
 		}
@@ -449,6 +494,60 @@ func (m *MockMCPServer) ReceivedRequests() []IncomingRequest {
 		}
 	}
 	return out
+}
+
+// ReceivedHTTPRequests returns all HTTP requests observed by the mock server.
+func (m *MockMCPServer) ReceivedHTTPRequests() []IncomingHTTPRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]IncomingHTTPRequest, len(m.httpSeen))
+	for i, req := range m.httpSeen {
+		out[i] = IncomingHTTPRequest{
+			Method:  req.Method,
+			Path:    req.Path,
+			Headers: cloneHeader(req.Headers),
+			Body:    bytes.Clone(req.Body),
+		}
+	}
+	return out
+}
+
+func (m *MockMCPServer) recordHTTPRequest(req *http.Request, body []byte) {
+	if m == nil || req == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	path := ""
+	if req.URL != nil {
+		path = req.URL.Path
+	}
+	m.httpSeen = append(m.httpSeen, IncomingHTTPRequest{
+		Method:  req.Method,
+		Path:    path,
+		Headers: req.Header.Clone(),
+		Body:    bytes.Clone(body),
+	})
+}
+
+func (m *MockMCPServer) checkRequiredHeaders(w http.ResponseWriter, req *http.Request) bool {
+	if m == nil || req == nil {
+		return true
+	}
+	m.mu.Lock()
+	requirements := append([]requiredHeader(nil), m.requiredHeaders...)
+	m.mu.Unlock()
+	for _, requirement := range requirements {
+		if requirement.predicate != nil && !requirement.predicate(req) {
+			continue
+		}
+		if req.Header.Get(requirement.name) == requirement.value {
+			continue
+		}
+		http.Error(w, fmt.Sprintf("missing required header %s", requirement.name), http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 func (m *MockMCPServer) uniqueToolsLocked() []string {

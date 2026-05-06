@@ -73,6 +73,8 @@ type fileMCPConfig struct {
 	HTTPProxy             *string            `yaml:"http_proxy"`
 	ClientCert            *string            `yaml:"client_cert"`
 	ClientKey             *string            `yaml:"client_key"`
+	ExtraHeaders          map[string]string  `yaml:"extra_headers"`
+	DiscoveryExtraHeaders map[string]string  `yaml:"discovery_extra_headers"`
 	ConnectionMaxTTL      *string            `yaml:"connection_max_ttl"`
 	MaxConcurrentRequests *int               `yaml:"max_concurrent_requests"`
 }
@@ -224,6 +226,12 @@ func (c fileConfig) toEnv(lookupEnv func(string) (string, bool)) (map[string]str
 	setString(env, "MCP_HTTP_PROXY", c.MCP.HTTPProxy)
 	setString(env, "MCP_CLIENT_CERT", c.MCP.ClientCert)
 	setString(env, "MCP_CLIENT_KEY", c.MCP.ClientKey)
+	if len(c.MCP.ExtraHeaders) > 0 {
+		env["MCP_EXTRA_HEADERS"] = joinHeaderMap(c.MCP.ExtraHeaders)
+	}
+	if len(c.MCP.DiscoveryExtraHeaders) > 0 {
+		env["MCP_DISCOVERY_EXTRA_HEADERS"] = joinHeaderMap(c.MCP.DiscoveryExtraHeaders)
+	}
 	setString(env, "MCP_CONNECTION_MAX_TTL", c.MCP.ConnectionMaxTTL)
 	setInt(env, "MCP_MAX_CONCURRENT_REQUESTS", c.MCP.MaxConcurrentRequests)
 

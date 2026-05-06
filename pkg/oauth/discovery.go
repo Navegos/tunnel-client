@@ -13,6 +13,7 @@ import (
 	"github.com/jpillora/backoff"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 
+	"go.openai.org/api/tunnel-client/pkg/headerscope"
 	"go.openai.org/api/tunnel-client/pkg/types"
 	"go.openai.org/api/tunnel-client/pkg/version"
 )
@@ -108,6 +109,7 @@ func runOAuthMetadataDiscoveryPass(
 			failureType = discoveryFailureTypeNonTimeout
 			continue
 		}
+		req = req.WithContext(headerscope.WithMCPDiscovery(req.Context()))
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", version.UserAgent)
 
@@ -205,7 +207,7 @@ func doWithRetryForTimeout(
 	var lastErr error
 	for attempt := 0; attempt < oauthMetadataRequestRetryCount; attempt++ {
 		timeout := timeoutBackoff.Duration()
-		reqCtx, cancel := context.WithTimeout(ctx, timeout)
+		reqCtx, cancel := context.WithTimeout(baseReq.Context(), timeout)
 		req := baseReq.Clone(reqCtx)
 		resp, err := client.Do(req)
 		cancel()
