@@ -80,7 +80,27 @@ check_source_version() {
   local expected actual
   expected="$(release_version_from_tag_or_version "$1")"
   actual="$(source_version)"
-  [[ "$actual" == "$expected" ]] || die "source version ${actual} in pkg/version/VERSION does not match release version ${expected}"
+  if [[ "$actual" == "$expected" ]]; then
+    return
+  fi
+
+  local next_dev
+  next_dev="$(next_patch_dev_version "$expected")"
+  if [[ -n "$next_dev" && "$actual" == "$next_dev" ]]; then
+    return
+  fi
+
+  if [[ -n "$next_dev" ]]; then
+    die "source version ${actual} in pkg/version/VERSION does not match release version ${expected} or next development version ${next_dev}"
+  fi
+  die "source version ${actual} in pkg/version/VERSION does not match release version ${expected}"
+}
+
+next_patch_dev_version() {
+  local version="$1"
+  if [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    printf '%s.%s.%s-dev\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "$((BASH_REMATCH[3] + 1))"
+  fi
 }
 
 make_tag() {
