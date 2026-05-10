@@ -90,7 +90,7 @@ func TestBridgeStartThreadTimeoutIncludesRecentDiagnostics(t *testing.T) {
 		Summary: "thread started",
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	ctx, cancel := expiredDeadlineContext()
 	defer cancel()
 
 	_, err := bridge.StartThread(ctx, ThreadStartParams{CWD: "/workspace/openai"})
@@ -117,7 +117,7 @@ func TestBridgeStartTurnTimeoutIncludesRecentDiagnostics(t *testing.T) {
 		Summary:  "thread started",
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	ctx, cancel := expiredDeadlineContext()
 	defer cancel()
 
 	_, err := bridge.StartTurn(ctx, TurnStartParams{
@@ -172,6 +172,10 @@ func newMockBridge(t *testing.T) *Bridge {
 	})
 
 	return bridge
+}
+
+func expiredDeadlineContext() (context.Context, context.CancelFunc) {
+	return context.WithDeadline(context.Background(), time.Now().Add(-time.Nanosecond))
 }
 
 type discardWriteCloser struct{}

@@ -410,7 +410,10 @@ func TestMockTunnelServiceWaitUntilIdle(t *testing.T) {
 		}},
 	})
 
-	shortCtx, shortCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	shortCtx, shortCancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Nanosecond),
+	)
 	defer shortCancel()
 	if err := mock.WaitUntilIdle(shortCtx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected deadline exceeded waiting for pending work, got %v", err)

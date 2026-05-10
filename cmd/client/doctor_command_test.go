@@ -39,7 +39,7 @@ func TestDoctorSuccess(t *testing.T) {
 	}, "doctor",
 		"--control-plane.tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
 		"--mcp.server-url", "url="+server.URL+"/mcp,channel=main",
-		"--health.listen-addr", "127.0.0.1:7777",
+		"--health.listen-addr", "127.0.0.1:0",
 	)
 
 	require.NoError(t, err, stderr)
@@ -166,6 +166,7 @@ func TestDoctorJSONOutput(t *testing.T) {
 	}, "doctor",
 		"--control-plane.tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
 		"--mcp.server-url", "url="+server.URL+"/mcp,channel=main",
+		"--health.listen-addr", "127.0.0.1:0",
 		"--json",
 	)
 
@@ -184,7 +185,7 @@ func TestDoctorReadsProfile(t *testing.T) {
 	data, err := generateProfileSample("sample_mcp_with_dcr", sampleProfileRequest{
 		TunnelID:         "tunnel_0123456789abcdef0123456789abcdef",
 		APIKeyRef:        "env:CONTROL_PLANE_API_KEY",
-		HealthListenAddr: "127.0.0.1:7777",
+		HealthListenAddr: "127.0.0.1:0",
 		MCPCommand:       testExecutableCommand(),
 	})
 	require.NoError(t, err)
