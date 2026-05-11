@@ -101,6 +101,7 @@ grep -A2 '^\[plugins\."tunnel-mcp@debug"\]' "$CODEX_HOME_DIR/config.toml"
 "$CODEX_HOME_DIR/plugins/cache/debug/tunnel-mcp/local/scripts/tunnel_mcp" --help
 tunnel-client codex status --json
 tunnel-client codex diagnose --json
+scripts/tunnel_mcp self-check
 ```
 
 If the plugin is installed on disk but missing from the current Codex session,

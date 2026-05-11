@@ -127,6 +127,7 @@ func TestBundledPluginSurfacesUseRuntimesCommandSurface(t *testing.T) {
 	requirePluginContainsAll(t, read("tunnel-mcp/skills/tunnel-mcp/SKILL.md"),
 		"`tunnel-client runtimes ...`",
 		"`references/runtime-flows.md`: create, connect, list, status, stop, rm, attach by tunnel id",
+		"`scripts/tunnel_mcp self-check`",
 	)
 	requirePluginContainsAll(t, read("tunnel-mcp/skills/tunnel-mcp/references/runtime-flows.md"),
 		"Use `tunnel-client runtimes ...` for native runtime lifecycle management.",
@@ -312,17 +313,22 @@ func TestEmbeddedSkillIncludesMissingBinaryResponseContract(t *testing.T) {
 	}
 	text := string(data)
 	for _, snippet := range []string{
-		"Missing-binary response contract:",
-		"https://github.com/openai/tunnel-client/releases/latest",
-		"https://github.com/openai/tunnel-client",
-		"git clone https://github.com/openai/tunnel-client.git",
-		"go build -o bin/tunnel-client ./cmd/client",
-		"go build -o bin/tunnel-client.exe ./cmd/client",
-		"TUNNEL_CLIENT_BIN",
-		"--tunnel-client-bin /path/to/tunnel-client",
+		"`references/binary.md`: how to find or obtain a public-safe `tunnel-client` binary",
+		"`scripts/tunnel_mcp self-check`",
+		"Treat ambient `PATH` binary candidates as diagnostics",
 	} {
 		if !strings.Contains(text, snippet) {
 			t.Fatalf("expected embedded skill to contain %q, got:\n%s", snippet, text)
+		}
+	}
+	for _, snippet := range []string{
+		"https://github.com/openai/tunnel-client/releases/latest",
+		"git clone https://github.com/openai/tunnel-client.git",
+		"go build -o bin/tunnel-client ./cmd/client",
+		"go build -o bin/tunnel-client.exe ./cmd/client",
+	} {
+		if strings.Contains(text, snippet) {
+			t.Fatalf("expected embedded skill to route detailed binary guidance to references, found %q in:\n%s", snippet, text)
 		}
 	}
 	if strings.Contains(text, "python3 scripts/install_plugin.py") {

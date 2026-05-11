@@ -32,6 +32,28 @@ func TestInstallExportsPluginAndUpdatesConfig(t *testing.T) {
 	require.Contains(t, string(configData), "enabled = true")
 }
 
+func TestInstallForMarketplacePersistsBinaryHintAndConfigKey(t *testing.T) {
+	t.Parallel()
+
+	codexHome := t.TempDir()
+	tunnelClientBin := filepath.Join(t.TempDir(), "tunnel-client")
+	require.NoError(t, os.WriteFile(tunnelClientBin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	detection, err := InstallForMarketplace(codexHome, "openai-internal-testing", tunnelClientBin)
+	require.NoError(t, err)
+
+	require.True(t, detection.PluginInstalled)
+	require.Equal(t, "openai-internal-testing", detection.PluginMarketplace)
+	require.Equal(t, "tunnel-mcp@openai-internal-testing", detection.PluginKey)
+	require.FileExists(t, filepath.Join(detection.PluginDir, ".tunnel-client-bin"))
+	normalized, err := NormalizeBinaryPath(tunnelClientBin)
+	require.NoError(t, err)
+	require.Equal(t, normalized, detection.PluginBinaryHint)
+	configData, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	require.NoError(t, err)
+	require.Contains(t, string(configData), `[plugins."tunnel-mcp@openai-internal-testing"]`)
+}
+
 func TestExportWritesBinaryHintWhenProvided(t *testing.T) {
 	t.Parallel()
 

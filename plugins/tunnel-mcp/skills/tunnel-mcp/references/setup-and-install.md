@@ -14,8 +14,14 @@ you need to inspect the plugin contents first:
 - `cd /tmp/tunnel-mcp && sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client`
 - `Set-Location C:\tmp\tunnel-mcp; powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe`
 
-After install, prefer the installed plugin router and persisted
-`.tunnel-client-bin` hint over an ambient `tunnel-client` found on `PATH`.
+After install or export, verify the persisted `.tunnel-client-bin` hint before
+using the router:
+
+- `test -f "$CODEX_HOME/plugins/cache/<marketplace>/tunnel-mcp/<version>/.tunnel-client-bin"`
+- `scripts/tunnel_mcp self-check`
+
+Prefer the installed plugin router and persisted `.tunnel-client-bin` hint over
+an ambient `tunnel-client` found on `PATH`.
 If `.tunnel-client-bin` is missing, routed commands report any ambient
 `PATH` candidate but do not execute it. Set `TUNNEL_CLIENT_BIN` or pass
 `--tunnel-client-bin` to select that binary explicitly.
@@ -29,6 +35,11 @@ manifest is missing.
 enabled config keys, cache path, resolved binary, binary version,
 `.tunnel-client-bin` hint, state root, profile dir, Codex bridge state, and
 current health URL when an alias or health URL is supplied.
+
+`scripts/tunnel_mcp diagnose` negotiates binary compatibility. If the selected
+binary lacks `tunnel-client codex diagnose --plugin-root`, the router falls
+back to the supported `codex diagnose --json` or `codex status --json` path and
+reports the exact unsupported flag, `--plugin-root`, in JSON.
 
 The plugin is a thin router. It does not own protocol logic. After install,
 use the native CLI for runtime operations:

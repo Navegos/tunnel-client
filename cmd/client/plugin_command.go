@@ -52,6 +52,7 @@ func newCodexPluginCommand(lookupEnv func(string) (string, bool), stdout io.Writ
 
 func newCodexPluginInstallCommand(lookupEnv func(string) (string, bool), stdout io.Writer, stderr io.Writer) *cobra.Command {
 	var codexHome string
+	var marketplace string
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install the embedded Tunnel MCP Codex plugin into CODEX_HOME",
@@ -60,16 +61,18 @@ func newCodexPluginInstallCommand(lookupEnv func(string) (string, bool), stdout 
 			if home == "" {
 				home = codexplugin.ResolveCodexHome(lookupEnv)
 			}
-			detection, err := codexplugin.Install(home, currentExecutablePath())
+			detection, err := codexplugin.InstallForMarketplace(home, marketplace, currentExecutablePath())
 			if err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Installed %s into %s\n", detection.PluginName, detection.PluginDir)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Updated Codex config %s\n", detection.ConfigPath)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Persisted binary hint %s\n", detection.PluginBinaryHintPath)
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Next:")
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), `  tunnel-client codex assistant "Summarize the current tunnel setup."`)
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  tunnel-client help plugin")
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  test -f %s\n", detection.PluginDir+"/.codex-plugin/plugin.json")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  test -f %s\n", detection.PluginBinaryHintPath)
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  start a new Codex session if plugins were already loaded")
 			return nil
 		},
@@ -77,6 +80,7 @@ func newCodexPluginInstallCommand(lookupEnv func(string) (string, bool), stdout 
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.Flags().StringVar(&codexHome, "codex-home", "", "Override CODEX_HOME for plugin installation")
+	cmd.Flags().StringVar(&marketplace, "marketplace", "debug", "Codex plugin marketplace cache key to install into")
 	return cmd
 }
 
@@ -89,11 +93,13 @@ func newCodexPluginExportCommand(stdout io.Writer, stderr io.Writer) *cobra.Comm
 			if strings.TrimSpace(dir) == "" {
 				return fmt.Errorf("--dir is required")
 			}
-			if err := codexplugin.Export(dir, ""); err != nil {
+			if err := codexplugin.Export(dir, currentExecutablePath()); err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Exported embedded Codex plugin bundle to %s\n", dir)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Persisted binary hint %s\n", dir+"/.tunnel-client-bin")
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Next:")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s/scripts/tunnel_mcp self-check\n", dir)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  macOS/Linux: cd %s && sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client\n", dir)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Windows PowerShell: Set-Location %s; powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\Install-Plugin.ps1 --tunnel-client-bin C:\\path\\to\\tunnel-client.exe\n", dir)
 			return nil

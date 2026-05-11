@@ -152,11 +152,22 @@ func PluginTargetDirFor(codexHome string, marketplace string, pluginName string,
 }
 
 func Install(codexHome string, tunnelClientBinary string) (Detection, error) {
+	return InstallForMarketplace(codexHome, defaultMarketplace, tunnelClientBinary)
+}
+
+func InstallForMarketplace(codexHome string, marketplace string, tunnelClientBinary string) (Detection, error) {
 	manifest, err := pluginsbundle.TunnelMCPManifest()
 	if err != nil {
 		return Detection{}, err
 	}
-	target := filepath.Join(codexHome, "plugins", "cache", defaultMarketplace, manifest.Name, defaultVersion)
+	marketplace = strings.TrimSpace(marketplace)
+	if marketplace == "" {
+		marketplace = defaultMarketplace
+	}
+	if err := validateCacheSegment(marketplace, "marketplace"); err != nil {
+		return Detection{}, err
+	}
+	target := filepath.Join(codexHome, "plugins", "cache", marketplace, manifest.Name, defaultVersion)
 	if err := os.RemoveAll(target); err != nil {
 		return Detection{}, fmt.Errorf("remove existing plugin target %s: %w", target, err)
 	}
@@ -167,15 +178,32 @@ func Install(codexHome string, tunnelClientBinary string) (Detection, error) {
 		return Detection{}, err
 	}
 	configPath := filepath.Join(codexHome, "config.toml")
-	if err := updateConfig(configPath, manifest.Name, defaultMarketplace); err != nil {
+	if err := updateConfig(configPath, manifest.Name, marketplace); err != nil {
 		return Detection{}, err
 	}
-	return Detect(func(key string) (string, bool) {
+	detection := Detect(func(key string) (string, bool) {
 		if key == "CODEX_HOME" {
 			return codexHome, true
 		}
 		return "", false
-	}), nil
+	})
+	if detection.PluginBinaryHint == "" {
+		return Detection{}, fmt.Errorf("installed plugin %s is missing %s", target, binHintFilename)
+	}
+	return detection, nil
+}
+
+func validateCacheSegment(value string, field string) error {
+	if value == "" || value == "." || value == ".." {
+		return fmt.Errorf("%s is required", field)
+	}
+	if strings.HasPrefix(value, "-") || strings.TrimSpace(value) != value {
+		return fmt.Errorf("%s contains unsupported characters: %q", field, value)
+	}
+	if strings.ContainsAny(value, `/\"`) {
+		return fmt.Errorf("%s contains unsupported characters: %q", field, value)
+	}
+	return nil
 }
 
 func Uninstall(codexHome string) (UninstallResult, error) {

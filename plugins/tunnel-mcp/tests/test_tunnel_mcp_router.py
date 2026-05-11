@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import shutil
@@ -23,6 +24,58 @@ def _write_fake_tunnel_client(path: pathlib.Path) -> None:
         'for arg in "$@"; do\n'
         '  printf \'%s\\n\' "$arg" >> "$ROUTER_TEST_OUTPUT"\n'
         "done\n",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _write_fake_tunnel_client_with_diagnose_help(path: pathlib.Path) -> None:
+    path.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "codex" ] && [ "$2" = "diagnose" ] && [ "$3" = "--help" ]; then\n'
+        '  printf "%s\\n" "usage: tunnel-client codex diagnose [--plugin-root path]"\n'
+        "  exit 0\n"
+        "fi\n"
+        ': > "$ROUTER_TEST_OUTPUT"\n'
+        'for arg in "$@"; do\n'
+        '  printf \'%s\\n\' "$arg" >> "$ROUTER_TEST_OUTPUT"\n'
+        "done\n",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _write_fake_legacy_tunnel_client(path: pathlib.Path) -> None:
+    path.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then\n'
+        '  printf "%s\\n" "tunnel-client 0.1.0-legacy"\n'
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "codex" ] && [ "$2" = "diagnose" ] && [ "$3" = "--help" ]; then\n'
+        '  printf "%s\\n" "usage: tunnel-client codex diagnose [alias]"\n'
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "codex" ] && [ "$2" = "diagnose" ]; then\n'
+        '  for arg in "$@"; do\n'
+        '    if [ "$arg" = "--plugin-root" ]; then\n'
+        '      printf "%s\\n" "unknown flag: --plugin-root" >&2\n'
+        "      exit 2\n"
+        "    fi\n"
+        "  done\n"
+        '  printf "%s\\n" \'{"diagnose":"legacy"}\'\n'
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "codex" ] && [ "$2" = "status" ]; then\n'
+        '  printf "%s\\n" \'{"app_server_supported":true,"assistant_state":"ready"}\'\n'
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "admin-profiles" ] && [ "$2" = "list" ]; then\n'
+        '  printf "%s\\n" \'{"active_profile":"default","path":"/tmp/admin-profiles.json","profiles":[]}\'\n'
+        "  exit 0\n"
+        "fi\n"
+        'printf "%s\\n" "unexpected args: $*" >&2\n'
+        "exit 1\n",
         encoding="utf-8",
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -348,7 +401,7 @@ class TunnelMCPRouterTest(unittest.TestCase):
             plugin_root = _make_isolated_plugin_root(tmp_path)
             output_path = tmp_path / "args.json"
             fake_bin = tmp_path / "tunnel-client"
-            _write_fake_tunnel_client(fake_bin)
+            _write_fake_tunnel_client_with_diagnose_help(fake_bin)
 
             result = _run_router(
                 plugin_root / "scripts" / "tunnel_mcp",
@@ -373,6 +426,67 @@ class TunnelMCPRouterTest(unittest.TestCase):
                     "--json",
                 ],
             )
+
+    def test_router_diagnose_falls_back_when_plugin_root_flag_is_unsupported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
+            fake_bin = tmp_path / "tunnel-client"
+            _write_fake_legacy_tunnel_client(fake_bin)
+
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                [
+                    "--tunnel-client-bin",
+                    str(fake_bin),
+                    "diagnose",
+                    "docs-mcp",
+                ],
+                dict(os.environ),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload["app_router_compatibility"]["unsupported_flag"], "--plugin-root"
+            )
+            self.assertEqual(
+                payload["app_router_compatibility"]["fallback_used"],
+                "codex_diagnose_without_plugin_root",
+            )
+            self.assertEqual(payload["fallback"]["json"], {"diagnose": "legacy"})
+
+    def test_router_self_check_reports_compatibility_and_secret_reference_presence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            plugin_root = _make_isolated_plugin_root(tmp_path)
+            manifest_dir = plugin_root / ".codex-plugin"
+            manifest_dir.mkdir()
+            (manifest_dir / "plugin.json").write_text('{"version":"9.9.9"}', encoding="utf-8")
+            fake_bin = tmp_path / "tunnel-client"
+            _write_fake_legacy_tunnel_client(fake_bin)
+
+            result = _run_router(
+                plugin_root / "scripts" / "tunnel_mcp",
+                [
+                    "--tunnel-client-bin",
+                    str(fake_bin),
+                    "self-check",
+                ],
+                {**os.environ, "CONTROL_PLANE_API_KEY": "redacted-test-value"},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["selected_binary_path"], str(fake_bin))
+            self.assertEqual(payload["plugin_version"], "9.9.9")
+            self.assertIn("tunnel-client 0.1.0-legacy", payload["binary_version"])
+            self.assertEqual(payload["active_admin_profile"]["name"], "default")
+            self.assertEqual(
+                payload["app_router_compatibility"]["unsupported_flag"], "--plugin-root"
+            )
+            self.assertTrue(payload["runtime_key_reference_present"])
+            self.assertNotIn("redacted-test-value", result.stdout)
 
     def test_adjacent_windows_style_exe_name_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

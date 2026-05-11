@@ -333,6 +333,7 @@ func TestPluginCodexInstallExportAndUninstallCommands(t *testing.T) {
 	require.FileExists(t, filepath.Join(pluginDir, "scripts", "install_plugin.sh"))
 	require.FileExists(t, filepath.Join(codexHome, "config.toml"))
 	require.Contains(t, stdout, "Installed tunnel-mcp")
+	require.Contains(t, stdout, "Persisted binary hint")
 	require.Contains(t, stdout, "tunnel-client codex assistant")
 	require.Contains(t, stdout, "tunnel-client help plugin")
 	require.Contains(t, stdout, "start a new Codex session")
@@ -347,8 +348,10 @@ func TestPluginCodexInstallExportAndUninstallCommands(t *testing.T) {
 	require.FileExists(t, filepath.Join(exportDir, "scripts", "install_plugin.py"))
 	require.FileExists(t, filepath.Join(exportDir, "scripts", "install_plugin.sh"))
 	require.FileExists(t, filepath.Join(exportDir, ".codex-plugin", "plugin.json"))
-	require.NoFileExists(t, filepath.Join(exportDir, ".tunnel-client-bin"))
+	require.FileExists(t, filepath.Join(exportDir, ".tunnel-client-bin"))
 	require.Contains(t, stdout, "Exported embedded Codex plugin bundle")
+	require.Contains(t, stdout, "Persisted binary hint")
+	require.Contains(t, stdout, "scripts/tunnel_mcp self-check")
 	require.Contains(t, stdout, "sh scripts/install_plugin.sh --tunnel-client-bin /path/to/tunnel-client")
 	require.Contains(t, stdout, `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-Plugin.ps1 --tunnel-client-bin C:\path\to\tunnel-client.exe`)
 
@@ -365,6 +368,25 @@ func TestPluginCodexInstallExportAndUninstallCommands(t *testing.T) {
 	require.Contains(t, stdout, "Removed on-disk Codex config section")
 	require.Contains(t, stdout, "tunnel-client codex plugin install")
 	require.Contains(t, stdout, "restart any existing Codex session if the plugin was already loaded")
+}
+
+func TestPluginCodexInstallCanTargetMarketplaceCache(t *testing.T) {
+	t.Parallel()
+
+	codexHome := t.TempDir()
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME": t.TempDir(),
+	}, "codex", "plugin", "install", "--codex-home", codexHome, "--marketplace", "openai-internal-testing")
+
+	require.NoError(t, err, stderr)
+	pluginDir := codexplugin.PluginTargetDirFor(codexHome, "openai-internal-testing", "tunnel-mcp", "local")
+	require.FileExists(t, filepath.Join(pluginDir, ".codex-plugin", "plugin.json"))
+	require.FileExists(t, filepath.Join(pluginDir, ".tunnel-client-bin"))
+	require.Contains(t, stdout, "Installed tunnel-mcp")
+	require.Contains(t, stdout, "Persisted binary hint")
+	configData, readErr := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	require.NoError(t, readErr)
+	require.Contains(t, string(configData), `[plugins."tunnel-mcp@openai-internal-testing"]`)
 }
 
 func TestPluginCodexUninstallIsIdempotent(t *testing.T) {
