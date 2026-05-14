@@ -1,6 +1,7 @@
 Troubleshooting:
 
 Start with the local operator surfaces before changing config:
+  tunnel-client health --url-file /tmp/tunnel-client-health.url
   curl -fsS http://127.0.0.1:8080/healthz
   curl -fsS http://127.0.0.1:8080/readyz
   open http://127.0.0.1:8080/ui
@@ -33,6 +34,8 @@ Connector setup checks:
   - MCP connector traffic is POST-based JSON-RPC; a GET 404 is not a useful stream test.
 
 Useful diagnostics:
+  tunnel-client health --url-file /tmp/tunnel-client-health.url
+  tunnel-client health --port 8080
   tunnel-client doctor --profile <name> --explain
   tunnel-client doctor --profile <name> --json
   tunnel-client runtimes status <alias>

@@ -26,6 +26,7 @@ func newRootCommand(lookupEnv func(string) (string, bool), stdout io.Writer, std
 
 	rootCmd.AddCommand(newInitCommand(lookupEnv, stdout, stderr))
 	rootCmd.AddCommand(newDoctorCommand(lookupEnv, stdout, stderr))
+	rootCmd.AddCommand(newHealthCommand(stdout, stderr))
 	rootCmd.AddCommand(newRunCommand(lookupEnv))
 	rootCmd.AddCommand(newDevCommand(stdout, stderr))
 	rootCmd.AddCommand(newCodexCommand(lookupEnv, stdout, stderr))

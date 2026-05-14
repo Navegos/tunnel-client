@@ -15,6 +15,7 @@ shift 3
 startup_timeout_seconds="${STARTUP_TIMEOUT_SECONDS:-120.0}"
 client_pid=""
 tmpdir=""
+health_url_file=""
 
 cleanup() {
   if [[ -n "$client_pid" ]] && kill -0 "$client_pid" 2>/dev/null; then
@@ -41,6 +42,10 @@ profile_tunnel_id() {
   ' "$path"
 }
 
+log_event() {
+  printf '[%s] %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$*" >&2
+}
+
 request_ok() {
   local url="$1"
   local timeout_seconds="$2"
@@ -63,6 +68,50 @@ request_ok() {
   [[ "$status" == 2* ]]
 }
 
+emit_http_snapshot() {
+  local url="$1"
+  local timeout_seconds="$2"
+  shift 2
+
+  log_event "http snapshot for $url"
+  local -a curl_args=(
+    --silent
+    --show-error
+    --include
+    --max-time "$timeout_seconds"
+  )
+  while (($# > 0)); do
+    curl_args+=(-H "$1")
+    shift
+  done
+  curl "${curl_args[@]}" "$url" >&2 || true
+}
+
+emit_health_snapshot() {
+  if [[ -z "$health_url_file" ]]; then
+    log_event "health snapshot unavailable: health url file path not initialized"
+    return 0
+  fi
+  if [[ ! -f "$health_url_file" ]]; then
+    log_event "health snapshot unavailable: $health_url_file does not exist"
+    return 0
+  fi
+
+  local raw_health_url=""
+  raw_health_url="$(<"$health_url_file")"
+  raw_health_url="${raw_health_url//$'\n'/}"
+  log_event "health url file $health_url_file -> ${raw_health_url:-<empty>}"
+
+  if [[ -z "$raw_health_url" ]]; then
+    return 0
+  fi
+
+  log_event "tunnel-client health snapshot"
+  "$client_path" health --url-file "$health_url_file" >&2 || true
+  log_event "tunnel-client health snapshot json"
+  "$client_path" health --url-file "$health_url_file" --json >&2 || true
+}
+
 wait_for_running_process() {
   local description="$1"
 
@@ -70,8 +119,14 @@ wait_for_running_process() {
     return 0
   fi
 
-  wait "$client_pid" || true
-  printf 'tunnel-client exited before %s\n' "$description" >&2
+  local exit_code=0
+  if wait "$client_pid"; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+  log_event "tunnel-client exited before $description (exit_code=$exit_code)"
+  emit_health_snapshot
   exit 1
 }
 
@@ -111,6 +166,9 @@ fi
 "${command[@]}" &
 client_pid="$!"
 
+log_event "started tunnel-client preflight pid=$client_pid tunnel_id=$tunnel_id startup_timeout=${startup_timeout_seconds}s"
+log_event "preflight target ${preflight_url}"
+
 deadline="$((SECONDS + timeout_ceiling))"
 health_url=""
 while ((SECONDS < deadline)); do
@@ -119,8 +177,12 @@ while ((SECONDS < deadline)); do
     candidate="$(<"$health_url_file")"
     candidate="${candidate//$'\n'/}"
     if [[ -n "$candidate" ]]; then
-      health_url="$candidate"
-      if request_ok "${candidate%/}/readyz" 1.0; then
+      if [[ "$candidate" != "$health_url" ]]; then
+        health_url="$candidate"
+        log_event "discovered tunnel-client health url ${health_url}"
+      fi
+      if "$client_path" health --url-file "$health_url_file" >/dev/null 2>&1; then
+        log_event "tunnel-client reported healthy and ready at ${health_url}"
         break
       fi
     fi
@@ -128,8 +190,12 @@ while ((SECONDS < deadline)); do
   sleep 0.2
 done
 
-if [[ -z "$health_url" ]] || ! request_ok "${health_url%/}/readyz" 1.0; then
-  printf 'tunnel-client did not become ready within %ss\n' "$startup_timeout_seconds" >&2
+if [[ -z "$health_url" ]] || ! "$client_path" health --url-file "$health_url_file" >/dev/null 2>&1; then
+  log_event "tunnel-client did not become ready within ${startup_timeout_seconds}s"
+  emit_health_snapshot
+  if [[ -n "$health_url" ]]; then
+    emit_http_snapshot "${health_url%/}/readyz" 1.0
+  fi
   exit 1
 fi
 
@@ -137,10 +203,13 @@ preflight_deadline="$((SECONDS + timeout_ceiling))"
 while ((SECONDS < preflight_deadline)); do
   wait_for_running_process "preflight succeeding"
   if request_ok "$preflight_url" 2.0 "X-OPENAI-SKIP-AUTH: true"; then
+    log_event "preflight succeeded for $preflight_url"
     exit 0
   fi
   sleep 0.2
 done
 
-printf 'tunnel-client preflight did not succeed before timeout\n' >&2
+log_event "tunnel-client preflight did not succeed before timeout"
+emit_health_snapshot
+emit_http_snapshot "$preflight_url" 2.0 "X-OPENAI-SKIP-AUTH: true"
 exit 1

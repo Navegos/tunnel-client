@@ -82,6 +82,7 @@ func TestTroubleshootingHelpTopicCoversRuntimeDebugging(t *testing.T) {
 	body, ok := loadHelpTopic("troubleshooting")
 	require.True(t, ok)
 	for _, snippet := range []string{
+		"tunnel-client health --url-file /tmp/tunnel-client-health.url",
 		"curl -fsS http://127.0.0.1:8080/healthz",
 		"/readyz includes startup gates for OAuth discovery and MCP probing.",
 		"If /readyz is 200 with a ready detail:",
