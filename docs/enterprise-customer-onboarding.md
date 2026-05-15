@@ -284,10 +284,23 @@ Recommended configuration:
 - `MCP_MAX_CONCURRENT_REQUESTS`: MCP parallelism (default `10`)
 - `LOG_FORMAT=json` and `LOG_LEVEL=info` for production logs
 
+Optional control-plane mTLS configuration:
+
+- `CONTROL_PLANE_CLIENT_CERT`: path to the PEM client certificate for OpenAI control-plane HTTPS
+- `CONTROL_PLANE_CLIENT_KEY`: path to the PEM client private key paired with `CONTROL_PLANE_CLIENT_CERT`
+- When those are configured with the default `CONTROL_PLANE_BASE_URL=https://api.openai.com`, tunnel-client automatically calls `https://mtls.api.openai.com`.
+- Control-plane mTLS is additive to `CONTROL_PLANE_API_KEY`; it does not replace API-key auth.
+- If the runtime API key's org/project requires API mTLS and no valid control-plane certificate is presented, the control-plane request fails with code `certificate_required`.
+
 Optional mTLS configuration for MCP server authentication:
 
 - `MCP_CLIENT_CERT`: path to PEM client certificate used for outbound MCP HTTPS
 - `MCP_CLIENT_KEY`: path to PEM client private key (must be paired with `MCP_CLIENT_CERT`)
+
+Do not reuse `MCP_CLIENT_CERT` / `MCP_CLIENT_KEY` for the OpenAI control-plane hop;
+those settings authenticate tunnel-client to the customer MCP server, while
+`CONTROL_PLANE_CLIENT_CERT` / `CONTROL_PLANE_CLIENT_KEY` authenticate tunnel-client
+to OpenAI's mTLS API endpoint.
 
 Operational helpers (optional):
 
