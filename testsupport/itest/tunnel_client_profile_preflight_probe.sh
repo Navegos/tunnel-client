@@ -13,15 +13,21 @@ preflight_base_url="$3"
 shift 3
 
 startup_timeout_seconds="${STARTUP_TIMEOUT_SECONDS:-120.0}"
+disconnect_timeout_seconds="${DISCONNECT_TIMEOUT_SECONDS:-30.0}"
 client_pid=""
 tmpdir=""
 health_url_file=""
 
-cleanup() {
+stop_client() {
   if [[ -n "$client_pid" ]] && kill -0 "$client_pid" 2>/dev/null; then
     kill "$client_pid" 2>/dev/null || true
     wait "$client_pid" 2>/dev/null || true
   fi
+  client_pid=""
+}
+
+cleanup() {
+  stop_client
   if [[ -n "$tmpdir" && -d "$tmpdir" ]]; then
     rm -rf "$tmpdir"
   fi
@@ -66,6 +72,29 @@ request_ok() {
   local status=""
   status="$(curl "${curl_args[@]}" "$url" 2>/dev/null || true)"
   [[ "$status" == 2* ]]
+}
+
+request_json() {
+  local url="$1"
+  local timeout_seconds="$2"
+  local payload="$3"
+  shift 3
+
+  local -a curl_args=(
+    --silent
+    --show-error
+    --include
+    --max-time "$timeout_seconds"
+    --request POST
+    --header "Content-Type: application/json"
+    --data "$payload"
+  )
+  while (($# > 0)); do
+    curl_args+=(-H "$1")
+    shift
+  done
+
+  curl "${curl_args[@]}" "$url" 2>/dev/null || true
 }
 
 emit_http_snapshot() {
@@ -137,6 +166,8 @@ tunnel_id="$(profile_tunnel_id "$profile_file")" || {
   exit 1
 }
 preflight_url="${preflight_base_url%/}/.well-known/oauth-protected-resource/v1/mcp/${tunnel_id}"
+stopped_probe_url="${preflight_base_url%/}/v1/mcp/${tunnel_id}"
+stopped_probe_payload='{"jsonrpc":"2.0","id":"stopped-client-preflight","method":"ping","params":{}}'
 
 timeout_ceiling="${startup_timeout_seconds%.*}"
 if [[ "$startup_timeout_seconds" == *.* ]]; then
@@ -204,12 +235,48 @@ while ((SECONDS < preflight_deadline)); do
   wait_for_running_process "preflight succeeding"
   if request_ok "$preflight_url" 2.0 "X-OPENAI-SKIP-AUTH: true"; then
     log_event "preflight succeeded for $preflight_url"
-    exit 0
+    stop_client
+    break
   fi
   sleep 0.2
 done
 
-log_event "tunnel-client preflight did not succeed before timeout"
+if [[ -n "$client_pid" ]]; then
+  log_event "tunnel-client preflight did not succeed before timeout"
+  emit_health_snapshot
+  emit_http_snapshot "$preflight_url" 2.0 "X-OPENAI-SKIP-AUTH: true"
+  exit 1
+fi
+
+disconnect_timeout_ceiling="${disconnect_timeout_seconds%.*}"
+if [[ "$disconnect_timeout_seconds" == *.* ]]; then
+  disconnect_timeout_ceiling="$((disconnect_timeout_ceiling + 1))"
+fi
+if [[ "$disconnect_timeout_ceiling" -le 0 ]]; then
+  disconnect_timeout_ceiling=1
+fi
+
+disconnect_deadline="$((SECONDS + disconnect_timeout_ceiling))"
+while ((SECONDS < disconnect_deadline)); do
+  stopped_probe_response="$(
+    request_json \
+      "$stopped_probe_url" \
+      2.5 \
+      "$stopped_probe_payload" \
+      "X-OPENAI-SKIP-AUTH: true"
+  )"
+  if [[ "$stopped_probe_response" == *"HTTP/"*" 404 "* ]] &&
+    [[ "$stopped_probe_response" == *"tunnel_client_not_connected"* ]]; then
+    log_event "stopped-client probe reached tunnel_client_not_connected for $stopped_probe_url"
+    exit 0
+  fi
+
+  log_event "stopped-client probe not ready for $stopped_probe_url"
+  printf '%s\n' "$stopped_probe_response" >&2
+  sleep 0.2
+done
+
+log_event "stopped-client probe did not reach tunnel_client_not_connected before timeout"
 emit_health_snapshot
-emit_http_snapshot "$preflight_url" 2.0 "X-OPENAI-SKIP-AUTH: true"
+emit_http_snapshot "$stopped_probe_url" 2.5 "X-OPENAI-SKIP-AUTH: true"
 exit 1
