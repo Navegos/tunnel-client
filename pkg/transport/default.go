@@ -68,7 +68,11 @@ func ApplyClientCertificate(base http.RoundTripper, clientCertificate *tlsconfig
 	} else {
 		tlsConfig = tlsConfig.Clone()
 	}
-	tlsConfig.Certificates = []tls.Certificate{clientCertificate.Certificate}
+	certificate := clientCertificate.Certificate
+	tlsConfig.Certificates = []tls.Certificate{certificate}
+	tlsConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		return &certificate, nil
+	}
 	cloned.TLSClientConfig = tlsConfig
 	return cloned, nil
 }
