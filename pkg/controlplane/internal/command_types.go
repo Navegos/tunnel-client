@@ -12,12 +12,15 @@ import (
 )
 
 var (
-	_ controlplane.PolledCommand         = (*oauthDiscoveryCommand)(nil)
-	_ controlplane.OauthDiscoveryCommand = (*oauthDiscoveryCommand)(nil)
-	_ controlplane.PolledCommand         = (*jsonRpcCommand)(nil)
-	_ controlplane.JsonRpcCommand        = (*jsonRpcCommand)(nil)
-	_ typedCommand                       = (*oauthDiscoveryCommand)(nil)
-	_ typedCommand                       = (*jsonRpcCommand)(nil)
+	_ controlplane.PolledCommand             = (*oauthDiscoveryCommand)(nil)
+	_ controlplane.OauthDiscoveryCommand     = (*oauthDiscoveryCommand)(nil)
+	_ controlplane.PolledCommand             = (*jsonRpcCommand)(nil)
+	_ controlplane.JsonRpcCommand            = (*jsonRpcCommand)(nil)
+	_ controlplane.PolledCommand             = (*sessionTerminationCommand)(nil)
+	_ controlplane.SessionTerminationCommand = (*sessionTerminationCommand)(nil)
+	_ typedCommand                           = (*oauthDiscoveryCommand)(nil)
+	_ typedCommand                           = (*jsonRpcCommand)(nil)
+	_ typedCommand                           = (*sessionTerminationCommand)(nil)
 )
 
 // typedCommand narrows commands to those with a known discriminator.
@@ -84,3 +87,14 @@ func (c *oauthDiscoveryCommand) commandType() wiretypes.CommandType {
 }
 
 func (c *oauthDiscoveryCommand) IsOAuthDiscovery() bool { return true }
+
+// sessionTerminationCommand represents an explicit Streamable HTTP session close.
+type sessionTerminationCommand struct {
+	basePolledCommand
+}
+
+func (c *sessionTerminationCommand) commandType() wiretypes.CommandType {
+	return wiretypes.CommandTypeSessionTermination
+}
+
+func (c *sessionTerminationCommand) IsSessionTermination() bool { return true }

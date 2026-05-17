@@ -31,6 +31,7 @@ import (
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	wiretypes "go.openai.org/api/tunnel-client/pkg/controlplane/wiretypes"
 	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
 	"go.openai.org/api/tunnel-client/pkg/tunnelctx"
@@ -1338,6 +1339,62 @@ func TestTunnelServiceClientPollReturnsOauthDiscoveryCommand(t *testing.T) {
 	type hasMessage interface{ Message() jsonrpc.Message }
 	_, ok := cmd.(hasMessage)
 	assert.False(t, ok, "oauth discovery command should not expose Message()")
+}
+
+func TestTunnelServiceClientPollReturnsSessionTerminationCommand(t *testing.T) {
+	t.Parallel()
+
+	const (
+		tunnelID  = "cli-tunnel"
+		apiKey    = "test-api-key"
+		requestID = "cmd-terminate"
+		limit     = 1
+	)
+
+	const payload = `
+{
+  "commands": [
+    {
+      "command_type": "session_termination",
+      "request_id": "cmd-terminate",
+      "shard_token": "shard-terminate",
+      "created_at": "2025-10-29T23:08:09Z",
+      "headers": {"Mcp-Session-Id": ["session-123"]}
+    }
+  ]
+}
+`
+
+	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:     mustParseURL(t, server.URL),
+		TunnelID:    types.TunnelID(tunnelID),
+		APIKey:      apiKey,
+		PollTimeout: time.Second,
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	if !assert.NoError(t, err, "NewTunnelServiceClient failed") {
+		return
+	}
+
+	cmds, _, err := client.Poll(context.Background(), limit)
+	if !assert.NoError(t, err, "Poll failed") {
+		return
+	}
+	if !assert.Len(t, cmds, 1, "expected exactly one command") {
+		return
+	}
+
+	cmd, ok := cmds[0].(controlplane.SessionTerminationCommand)
+	require.True(t, ok, "expected session termination command")
+	assert.Equal(t, requestID, cmd.RequestID().String())
+	assert.Equal(t, "shard-terminate", cmd.ShardToken())
+	sessionID, hasSessionID := cmd.SessionID()
+	assert.True(t, hasSessionID)
+	assert.Equal(t, "session-123", sessionID)
 }
 
 func TestNewTunnelServiceClientValidatesInputs(t *testing.T) {

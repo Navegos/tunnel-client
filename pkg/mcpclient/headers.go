@@ -2,6 +2,7 @@ package mcpclient
 
 import (
 	"net/http"
+	"strings"
 )
 
 const (
@@ -23,8 +24,17 @@ func FindHeaderValue(headers http.Header, target string) *string {
 		return nil
 	}
 	v := headers.Get(target)
-	if v == "" {
-		return nil
+	if v != "" {
+		return &v
 	}
-	return &v
+
+	for key, values := range headers {
+		if !strings.EqualFold(key, target) || len(values) == 0 || values[0] == "" {
+			continue
+		}
+		v = values[0]
+		return &v
+	}
+
+	return nil
 }

@@ -21,18 +21,20 @@ func TestNewProcessorChannelBindingsSuccess(t *testing.T) {
 	bindings, err := newProcessorChannelBindings(processorChannelBindingsParams{
 		Bindings: []dispatcherChannelBinding{
 			{
-				Channel:       types.Channel(" MAIN "),
-				Priority:      0,
-				Transport:     noopTransport{},
-				SupportsMCP:   true,
-				SupportsOAuth: true,
+				Channel:                    types.Channel(" MAIN "),
+				Priority:                   0,
+				Transport:                  noopTransport{},
+				SupportsMCP:                true,
+				SupportsOAuth:              true,
+				SupportsSessionTermination: true,
 			},
 			{
-				Channel:       types.Channel("harpoon"),
-				Priority:      0,
-				Transport:     noopTransport{},
-				SupportsMCP:   true,
-				SupportsOAuth: false,
+				Channel:                    types.Channel("harpoon"),
+				Priority:                   0,
+				Transport:                  noopTransport{},
+				SupportsMCP:                true,
+				SupportsOAuth:              false,
+				SupportsSessionTermination: false,
 			},
 		},
 	})
@@ -43,12 +45,14 @@ func TestNewProcessorChannelBindingsSuccess(t *testing.T) {
 	require.NotNil(t, mainBinding.Transport)
 	require.True(t, mainBinding.SupportsMCP)
 	require.True(t, mainBinding.SupportsOAuth)
+	require.True(t, mainBinding.SupportsSessionTermination)
 
 	harpoonBinding, ok := bindings[types.ChannelHarpoon]
 	require.True(t, ok)
 	require.NotNil(t, harpoonBinding.Transport)
 	require.True(t, harpoonBinding.SupportsMCP)
 	require.False(t, harpoonBinding.SupportsOAuth)
+	require.False(t, harpoonBinding.SupportsSessionTermination)
 }
 
 func TestNewProcessorChannelBindingsMissingRequired(t *testing.T) {

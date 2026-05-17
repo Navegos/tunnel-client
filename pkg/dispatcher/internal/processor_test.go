@@ -2471,6 +2471,100 @@ func TestProcessorHandlesOAuthDiscoveryCommand(t *testing.T) {
 	require.Equal(t, "application/json", got.response.Headers().Get("Content-Type"))
 }
 
+func TestProcessorHandlesSessionTerminationCommand(t *testing.T) {
+	t.Parallel()
+
+	transport := &sessionTerminatingForwardingTransport{
+		statusCode:      http.StatusMethodNotAllowed,
+		responseHeaders: http.Header{"Mcp-Protocol-Version": {"2025-06-18"}},
+	}
+	responder := newRecordingResponder()
+	processor, err := NewProcessor(processorParams{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ChannelBindings: newTestChannelBindings(transport),
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   newTestMeterProvider(t),
+	})
+	require.NoError(t, err)
+
+	sessionID := "session-terminate"
+	cmd := &fakeSessionTerminationCommand{
+		id:         types.RequestID("session-terminate"),
+		enqueuedAt: time.Now().Add(-time.Second),
+		polledAt:   time.Now(),
+		headers: http.Header{
+			mcpclient.HeaderSessionID:       {sessionID},
+			mcpclient.HeaderProtocolVersion: {"2025-06-18"},
+		},
+		sessionID:  &sessionID,
+		shardToken: "shard-session-terminate",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	got := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, got.requestID)
+	require.Equal(t, types.ResponseTypeSessionTermination, got.response.Type())
+	require.Equal(t, http.StatusMethodNotAllowed, got.response.ResponseCode())
+	require.Equal(t, "2025-06-18", got.response.Headers().Get("Mcp-Protocol-Version"))
+	require.Equal(t, cmd.headers, transport.terminationHeaders)
+}
+
+func TestProcessorRejectsSessionTerminationForUnsupportedTransport(t *testing.T) {
+	t.Parallel()
+
+	responder := newRecordingResponder()
+	processor, err := NewProcessor(processorParams{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ChannelBindings: map[types.Channel]ChannelBinding{
+			types.DefaultChannel: {
+				Transport:                  &stubForwardingTransport{conn: &stubForwardingConnection{}},
+				Priority:                   0,
+				SupportsMCP:                true,
+				SupportsOAuth:              true,
+				SupportsSessionTermination: false,
+			},
+			types.ChannelHarpoon: {
+				Transport:                  &stubForwardingTransport{conn: &stubForwardingConnection{}},
+				Priority:                   0,
+				Routable:                   func() bool { return false },
+				SupportsMCP:                true,
+				SupportsOAuth:              false,
+				SupportsSessionTermination: false,
+			},
+		},
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   newTestMeterProvider(t),
+	})
+	require.NoError(t, err)
+
+	sessionID := "session-terminate"
+	cmd := &fakeSessionTerminationCommand{
+		id:         types.RequestID("session-terminate"),
+		enqueuedAt: time.Now().Add(-time.Second),
+		polledAt:   time.Now(),
+		headers: http.Header{
+			mcpclient.HeaderSessionID:       {sessionID},
+			mcpclient.HeaderProtocolVersion: {"2025-06-18"},
+		},
+		sessionID:  &sessionID,
+		shardToken: "shard-session-terminate",
+	}
+
+	require.NoError(t, processor.Process(context.Background(), cmd))
+
+	got := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, got.requestID)
+	require.Equal(t, types.ResponseTypeSessionTermination, got.response.Type())
+	require.Equal(t, http.StatusMethodNotAllowed, got.response.ResponseCode())
+}
+
 func TestProcessorOAuthDiscoveryPublishesHostBundle(t *testing.T) {
 	t.Parallel()
 
@@ -2776,17 +2870,19 @@ func newTestMCPConfig(t *testing.T, ttl time.Duration) *config.MCPConfig {
 func newTestChannelBindings(defaultTransport mcpclient.ForwardingTransport) map[types.Channel]ChannelBinding {
 	return map[types.Channel]ChannelBinding{
 		types.DefaultChannel: {
-			Transport:     defaultTransport,
-			Priority:      0,
-			SupportsMCP:   true,
-			SupportsOAuth: true,
+			Transport:                  defaultTransport,
+			Priority:                   0,
+			SupportsMCP:                true,
+			SupportsOAuth:              true,
+			SupportsSessionTermination: true,
 		},
 		types.ChannelHarpoon: {
-			Transport:     &stubForwardingTransport{conn: &stubForwardingConnection{}},
-			Priority:      0,
-			Routable:      func() bool { return false },
-			SupportsMCP:   true,
-			SupportsOAuth: false,
+			Transport:                  &stubForwardingTransport{conn: &stubForwardingConnection{}},
+			Priority:                   0,
+			Routable:                   func() bool { return false },
+			SupportsMCP:                true,
+			SupportsOAuth:              false,
+			SupportsSessionTermination: false,
 		},
 	}
 }
@@ -2877,6 +2973,19 @@ type failingForwardingTransport struct {
 
 func (s *failingForwardingTransport) Connect(context.Context) (mcpclient.ForwardingConnection, error) {
 	return nil, s.err
+}
+
+type sessionTerminatingForwardingTransport struct {
+	stubForwardingTransport
+	statusCode         int
+	responseHeaders    http.Header
+	err                error
+	terminationHeaders http.Header
+}
+
+func (s *sessionTerminatingForwardingTransport) TerminateSession(_ context.Context, headers http.Header) (int, http.Header, error) {
+	s.terminationHeaders = headers.Clone()
+	return s.statusCode, s.responseHeaders, s.err
 }
 
 type countingMCPTransport struct {
@@ -3059,6 +3168,35 @@ func (f *fakeOauthDiscoveryCommand) Channel() types.Channel {
 }
 func (f *fakeOauthDiscoveryCommand) SessionID() (string, bool) { return "", false }
 func (f *fakeOauthDiscoveryCommand) IsOAuthDiscovery() bool    { return true }
+
+type fakeSessionTerminationCommand struct {
+	id         types.RequestID
+	enqueuedAt time.Time
+	polledAt   time.Time
+	headers    http.Header
+	sessionID  *string
+	shardToken string
+	channel    types.Channel
+}
+
+func (f *fakeSessionTerminationCommand) RequestID() types.RequestID { return f.id }
+func (f *fakeSessionTerminationCommand) EnqueuedAt() time.Time      { return f.enqueuedAt }
+func (f *fakeSessionTerminationCommand) PolledAt() time.Time        { return f.polledAt }
+func (f *fakeSessionTerminationCommand) Headers() http.Header       { return f.headers }
+func (f *fakeSessionTerminationCommand) ShardToken() string         { return f.shardToken }
+func (f *fakeSessionTerminationCommand) Channel() types.Channel {
+	if f.channel == "" {
+		return types.DefaultChannel
+	}
+	return f.channel
+}
+func (f *fakeSessionTerminationCommand) SessionID() (string, bool) {
+	if f.sessionID == nil {
+		return "", false
+	}
+	return *f.sessionID, true
+}
+func (f *fakeSessionTerminationCommand) IsSessionTermination() bool { return true }
 
 type unknownPolledCommand struct {
 	id         types.RequestID

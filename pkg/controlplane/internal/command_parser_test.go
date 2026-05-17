@@ -113,3 +113,31 @@ func TestConvertRawOauthDiscoveryCommand_Success(t *testing.T) {
 		t.Fatalf("unexpected headers: %v", cmd.Headers())
 	}
 }
+
+func TestConvertRawSessionTerminationCommand_RequiresSessionHeader(t *testing.T) {
+	t.Parallel()
+
+	raw := wiretypes.RawSessionTerminationPolledCommand{
+		BaseRawPolledCommand: wiretypes.BaseRawPolledCommand{
+			RequestID:  "terminate-1",
+			ShardToken: "sh-terminate",
+			CreatedAt:  time.Unix(1732844889, 0).UTC(),
+			Headers:    http.Header{"mcp-session-id": {"session-123"}},
+		},
+	}
+	cmd, err := convertRawSessionTerminationCommand(raw, time.Unix(1732844890, 0).UTC())
+	if err != nil {
+		t.Fatalf("convertRawSessionTerminationCommand unexpected error: %v", err)
+	}
+	if !cmd.IsSessionTermination() {
+		t.Fatal("expected session termination marker")
+	}
+	if sessionID, ok := cmd.SessionID(); !ok || sessionID != "session-123" {
+		t.Fatalf("unexpected session id: %q ok=%v", sessionID, ok)
+	}
+
+	raw.Headers = nil
+	if _, err := convertRawSessionTerminationCommand(raw, time.Now()); err == nil {
+		t.Fatal("expected error for missing session header")
+	}
+}

@@ -144,7 +144,9 @@ Starter prompts for Codex:
 - On startup, it fetches tunnel metadata for operator visibility:
   - `GET /v1/tunnels/{tunnel_id}`
 - It forwards received JSON-RPC requests to your configured MCP server over
-  Streamable HTTP, stdio, or in-memory transport.
+  Streamable HTTP, stdio, or in-memory transport, and relays explicit
+  Streamable HTTP session termination requests when the control plane receives
+  `DELETE /v1/mcp/{tunnel_id}`.
 - It routes commands by channel: `main` targets the configured MCP binding,
   additional configured channels can target their own MCP bindings, and
   `harpoon` is routable only when Harpoon has registered targets.

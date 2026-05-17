@@ -57,6 +57,17 @@ func convertRawOauthDiscoveryCommand(raw wiretypes.RawOauthDiscoveryPolledComman
 	return &oauthDiscoveryCommand{basePolledCommand: base}, nil
 }
 
+func convertRawSessionTerminationCommand(raw wiretypes.RawSessionTerminationPolledCommand, polledAt time.Time) (*sessionTerminationCommand, error) {
+	base, _, err := buildBase(raw.BaseRawPolledCommand, polledAt)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := base.SessionID(); !ok {
+		return nil, errors.New("missing Mcp-Session-Id header")
+	}
+	return &sessionTerminationCommand{basePolledCommand: base}, nil
+}
+
 func convertRawCommand(raw wiretypes.RawJSONRPCPolledCommand, polledAt time.Time) (*jsonRpcCommand, error) {
 	// Ensure JSON is non-empty; empty object is acceptable.
 	if len(raw.JSONRPC) == 0 {

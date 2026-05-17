@@ -133,6 +133,27 @@ func TestTunnelResponsePayloadJSONRPCNotifyType(t *testing.T) {
 	}
 }
 
+func TestTunnelResponsePayloadSessionTerminationType(t *testing.T) {
+	payload := TunnelResponsePayload{
+		RequestID:    "req-terminate",
+		ResponseCode: http.StatusNoContent,
+		ResponseType: ResponsePayloadSessionTermination,
+	}
+
+	marshaled, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(marshaled, &got); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if got["resp_type"] != string(ResponsePayloadSessionTermination) {
+		t.Fatalf("expected resp_type %q, got %v", ResponsePayloadSessionTermination, got["resp_type"])
+	}
+}
+
 func TestPolledCommandEnvelopeUnmarshalCommands(t *testing.T) {
 	fixture := []byte(`{"commands":[{"request_id":"req-777","shard_token":"shard-888","command_type":"jsonrpc","channel":"harpoon","created_at":"2024-10-11T12:13:14Z","headers":{"X-Test":["alpha"]},"jsonrpc":{"jsonrpc":"2.0","id":"rpc-1","method":"tools/list","params":{"needle":"hay"}}},{"request_id":"req-888","shard_token":"shard-999","command_type":"oauth_discovery","channel":"main","created_at":"2024-10-11T12:14:15Z","headers":{}}]}`)
 

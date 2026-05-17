@@ -156,6 +156,43 @@ func TestForwardingTransportConnectPropagatesBaseError(t *testing.T) {
 	}
 }
 
+func TestForwardingTransportTerminateSessionForwardsHeadersAndCapturesResponse(t *testing.T) {
+	t.Parallel()
+
+	wantHeaders := http.Header{"X-Response": {"ok"}}
+	wantRequestHeaders := http.Header{"Mcp-Session-Id": {"session-123"}}
+	transport := &forwardingTransport{
+		base: contextCapturingTransport{
+			connect: func(ctx context.Context) (mcp.Connection, error) {
+				return closeFuncConnection{
+					closeFunc: func() error {
+						carrier := internal.CarrierFromContext(ctx)
+						if carrier == nil {
+							t.Fatal("carrier missing in session termination context")
+						}
+						if diff := cmp.Diff(wantRequestHeaders, carrier.RequestHeaders(), cmpopts.SortSlices(func(a, b string) bool { return a < b })); diff != "" {
+							t.Fatalf("session termination request headers mismatch (-want +got):\n%s", diff)
+						}
+						carrier.StoreResponse(http.StatusNoContent, wantHeaders)
+						return nil
+					},
+				}, nil
+			},
+		},
+	}
+
+	statusCode, gotHeaders, err := transport.TerminateSession(context.Background(), wantRequestHeaders)
+	if err != nil {
+		t.Fatalf("TerminateSession returned error: %v", err)
+	}
+	if statusCode != http.StatusNoContent {
+		t.Fatalf("unexpected status code: got %d want %d", statusCode, http.StatusNoContent)
+	}
+	if diff := cmp.Diff(wantHeaders, gotHeaders, cmpopts.SortSlices(func(a, b string) bool { return a < b })); diff != "" {
+		t.Fatalf("session termination response headers mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestForwardingConnectionCloseDelegates(t *testing.T) {
 	t.Parallel()
 
@@ -271,6 +308,28 @@ type failingTransport struct {
 func (t *failingTransport) Connect(context.Context) (mcp.Connection, error) {
 	return nil, t.err
 }
+
+type contextCapturingTransport struct {
+	connect func(context.Context) (mcp.Connection, error)
+}
+
+func (t contextCapturingTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	return t.connect(ctx)
+}
+
+type closeFuncConnection struct {
+	closeFunc func() error
+}
+
+func (c closeFuncConnection) Read(context.Context) (jsonrpc.Message, error) { return nil, nil }
+func (c closeFuncConnection) Write(context.Context, jsonrpc.Message) error  { return nil }
+func (c closeFuncConnection) Close() error {
+	if c.closeFunc == nil {
+		return nil
+	}
+	return c.closeFunc()
+}
+func (c closeFuncConnection) SessionID() string { return "" }
 
 type closeTrackingConnection struct {
 	closed bool

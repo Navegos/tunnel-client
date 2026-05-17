@@ -14,15 +14,18 @@ const (
 	CommandTypeJSONRPC CommandType = "jsonrpc"
 	// CommandTypeOAuthDiscovery indicates an OAuth discovery command payload.
 	CommandTypeOAuthDiscovery CommandType = "oauth_discovery"
+	// CommandTypeSessionTermination indicates an explicit Streamable HTTP session close.
+	CommandTypeSessionTermination CommandType = "session_termination"
 )
 
 type ResponsePayloadType string
 
 const (
-	ResponsePayloadJSONRPC       ResponsePayloadType = "jsonrpc_response"
-	ResponsePayloadJSONRPCNotify ResponsePayloadType = "jsonrpc_notify"
-	ResponsePayloadNotifyAck     ResponsePayloadType = "notify_ack"
-	ResponsePayloadOAuth         ResponsePayloadType = "oauth_discovery_response"
+	ResponsePayloadJSONRPC            ResponsePayloadType = "jsonrpc_response"
+	ResponsePayloadJSONRPCNotify      ResponsePayloadType = "jsonrpc_notify"
+	ResponsePayloadNotifyAck          ResponsePayloadType = "notify_ack"
+	ResponsePayloadOAuth              ResponsePayloadType = "oauth_discovery_response"
+	ResponsePayloadSessionTermination ResponsePayloadType = "session_termination_response"
 )
 
 // TunnelResponsePayload mirrors the body posted to POST /v1/tunnel/{tunnel_id}/response when
@@ -68,6 +71,11 @@ type RawJSONRPCPolledCommand struct {
 // RawOauthDiscoveryPolledCommand represents an OAuth discovery style command.
 // It extends the base fields and may include discovery-specific attributes.
 type RawOauthDiscoveryPolledCommand struct {
+	BaseRawPolledCommand
+}
+
+// RawSessionTerminationPolledCommand represents an explicit Streamable HTTP session close.
+type RawSessionTerminationPolledCommand struct {
 	BaseRawPolledCommand
 }
 

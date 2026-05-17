@@ -369,6 +369,21 @@ func NewOAuthDiscoveryCommand(requestID string, headers http.Header) json.RawMes
 	return json.RawMessage(data)
 }
 
+// NewSessionTerminationCommand builds a raw tunnel command payload for explicit MCP session close.
+func NewSessionTerminationCommand(requestID string, headers http.Header) json.RawMessage {
+	command := map[string]any{
+		"command_type": "session_termination",
+		"request_id":   requestID,
+		"created_at":   time.Now().UTC().Format(time.RFC3339),
+		"shard_token":  requestID,
+	}
+	if hdrs := cloneHeader(headers); hdrs != nil {
+		command["headers"] = hdrs
+	}
+	data, _ := json.Marshal(command)
+	return json.RawMessage(data)
+}
+
 // Start launches the underlying httptest.Server and registers cleanup with t.
 func (m *MockTunnelService) Start(t testing.TB) {
 	t.Helper()
@@ -972,16 +987,24 @@ func (m *MockTunnelService) defaultSessionCommandMutator() CommandMutator {
 		if storage == nil {
 			return payload
 		}
-		var envelope wiretypes.RawJSONRPCPolledCommand
+		var envelope map[string]json.RawMessage
 		if err := json.Unmarshal(payload, &envelope); err != nil {
 			m.failf("session mutator decode command payload: %v", err)
 		}
-		if envelope.Headers == nil {
-			envelope.Headers = http.Header{}
+		headers := http.Header{}
+		if rawHeaders, ok := envelope["headers"]; ok && len(rawHeaders) > 0 {
+			if err := json.Unmarshal(rawHeaders, &headers); err != nil {
+				m.failf("session mutator decode command headers: %v", err)
+			}
 		}
 		if value, ok := storage.Get(sessionHeaderKey); ok && value != "" {
-			envelope.Headers.Set(sessionHeaderKey, value)
+			headers.Set(sessionHeaderKey, value)
 		}
+		rawHeaders, err := json.Marshal(headers)
+		if err != nil {
+			m.failf("session mutator encode command headers: %v", err)
+		}
+		envelope["headers"] = rawHeaders
 		mutated, err := json.Marshal(envelope)
 		if err != nil {
 			m.failf("session mutator encode command payload: %v", err)

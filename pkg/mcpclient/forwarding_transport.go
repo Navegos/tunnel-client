@@ -15,6 +15,12 @@ type ForwardingTransport interface {
 	Connect(ctx context.Context) (ForwardingConnection, error)
 }
 
+// SessionTerminatingTransport can explicitly close an MCP Streamable HTTP session and report
+// the upstream HTTP response returned by the MCP server.
+type SessionTerminatingTransport interface {
+	TerminateSession(ctx context.Context, headers http.Header) (int, http.Header, error)
+}
+
 // ForwardingConnection extends mcp.Connection with helpers that return the
 // response headers collected from the underlying HTTP transport.
 type ForwardingConnection interface {

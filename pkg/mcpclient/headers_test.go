@@ -42,6 +42,12 @@ func TestFindHeaderValue(t *testing.T) {
 			want:   ptr("session-123"),
 		},
 		{
+			name:    "handles directly stored lowercase keys",
+			headers: http.Header{"mcp-session-id": {"session-direct"}},
+			target:  HeaderSessionID,
+			want:    ptr("session-direct"),
+		},
+		{
 			name:    "returns nil for empty header value",
 			headers: http.Header{"X-Test": {""}},
 			target:  "X-Test",

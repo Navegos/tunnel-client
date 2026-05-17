@@ -11,6 +11,7 @@ import (
 )
 
 var _ ForwardingTransport = (*forwardingTransport)(nil)
+var _ SessionTerminatingTransport = (*forwardingTransport)(nil)
 
 // forwardingTransport bridges the public ForwardingTransport interface to the
 // internal implementation.
@@ -29,6 +30,23 @@ func (t *forwardingTransport) Connect(ctx context.Context) (ForwardingConnection
 	return &forwardingConnection{
 		base: conn,
 	}, nil
+}
+
+func (t *forwardingTransport) TerminateSession(ctx context.Context, headers http.Header) (int, http.Header, error) {
+	if t == nil || t.base == nil {
+		return 0, nil, nil
+	}
+	ctxWithHeaders, carrier, err := internal.ContextWithHeaders(ctx, headers)
+	if err != nil {
+		return 0, nil, err
+	}
+	conn, err := t.base.Connect(ctxWithHeaders)
+	if err != nil {
+		return 0, nil, err
+	}
+	err = conn.Close()
+	statusCode, responseHeaders := carrier.ResponseStatusAndHeaders()
+	return statusCode, responseHeaders, err
 }
 
 var _ ForwardingConnection = (*forwardingConnection)(nil)

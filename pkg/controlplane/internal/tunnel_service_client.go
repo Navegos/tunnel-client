@@ -232,6 +232,8 @@ func (c *TunnelServiceClient) PostResponse(ctx context.Context, requestID types.
 		payload.ResponseType = wiretypes.ResponsePayloadNotifyAck
 	case types.ResponseTypeOAuthDiscovery:
 		payload.ResponseType = wiretypes.ResponsePayloadOAuth
+	case types.ResponseTypeSessionTermination:
+		payload.ResponseType = wiretypes.ResponsePayloadSessionTermination
 	}
 
 	body, err := json.Marshal(payload)
@@ -400,6 +402,18 @@ func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, l
 			cmd, err := convertRawOauthDiscoveryCommand(od, polledAt)
 			if err != nil {
 				logger.WarnContext(ctx, "control-plane command dropped: invalid oauth_discovery payload", slog.String(tclog.FieldRequestID, od.RequestID), slog.String("error", err.Error()))
+				continue
+			}
+			out = append(out, cmd)
+		case wiretypes.CommandTypeSessionTermination:
+			var termination wiretypes.RawSessionTerminationPolledCommand
+			if err := json.Unmarshal(raw, &termination); err != nil {
+				logger.WarnContext(ctx, "control-plane command dropped: invalid session_termination payload", slog.String("error", err.Error()))
+				continue
+			}
+			cmd, err := convertRawSessionTerminationCommand(termination, polledAt)
+			if err != nil {
+				logger.WarnContext(ctx, "control-plane command dropped: invalid session_termination payload", slog.String(tclog.FieldRequestID, termination.RequestID), slog.String("error", err.Error()))
 				continue
 			}
 			out = append(out, cmd)

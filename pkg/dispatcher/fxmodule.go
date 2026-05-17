@@ -51,12 +51,13 @@ func newPolledCommandQueue(p Params) Result {
 }
 
 type dispatcherChannelBinding struct {
-	Channel       types.Channel
-	Priority      int
-	Transport     mcp.Transport
-	Routable      func() bool
-	SupportsMCP   bool
-	SupportsOAuth bool
+	Channel                    types.Channel
+	Priority                   int
+	Transport                  mcp.Transport
+	Routable                   func() bool
+	SupportsMCP                bool
+	SupportsOAuth              bool
+	SupportsSessionTermination bool
 }
 
 // Module registers the dispatcher components with the Fx graph. It provides the
@@ -107,12 +108,17 @@ func newConfiguredChannelBindings(cfg *config.MCPConfig, factory *mcpclient.Chan
 			return configuredChannelBindingsResult{}, err
 		}
 		channelName := binding.Channel.Canonical()
+		transportKind := binding.TransportKind
+		if transportKind == "" {
+			transportKind = config.MCPTransportHTTPStreamable
+		}
 		bindings = append(bindings, dispatcherChannelBinding{
-			Channel:       channelName,
-			Priority:      0,
-			Transport:     transport,
-			SupportsMCP:   true,
-			SupportsOAuth: channelName == types.DefaultChannel,
+			Channel:                    channelName,
+			Priority:                   0,
+			Transport:                  transport,
+			SupportsMCP:                true,
+			SupportsOAuth:              channelName == types.DefaultChannel,
+			SupportsSessionTermination: transportKind == config.MCPTransportHTTPStreamable,
 		})
 	}
 	return configuredChannelBindingsResult{Bindings: bindings}, nil
@@ -128,11 +134,12 @@ type harpoonChannelBindingParams struct {
 func newHarpoonChannelBinding(p harpoonChannelBindingParams) dispatcherChannelBinding {
 	transport := mcpclient.NewSharedConnectionTransport(p.HarpoonTransport)
 	return dispatcherChannelBinding{
-		Channel:       types.ChannelHarpoon,
-		Priority:      0,
-		Transport:     transport,
-		SupportsMCP:   true,
-		SupportsOAuth: false,
+		Channel:                    types.ChannelHarpoon,
+		Priority:                   0,
+		Transport:                  transport,
+		SupportsMCP:                true,
+		SupportsOAuth:              false,
+		SupportsSessionTermination: false,
 		Routable: func() bool {
 			return p.HarpoonRegistry != nil && p.HarpoonRegistry.Count() > 0
 		},
@@ -177,11 +184,12 @@ func newProcessorChannelBindings(p processorChannelBindingsParams) (map[types.Ch
 			}
 		}
 		out[canonical] = dispatcherinternal.ChannelBinding{
-			Transport:     transport,
-			Priority:      binding.Priority,
-			Routable:      binding.Routable,
-			SupportsMCP:   binding.SupportsMCP,
-			SupportsOAuth: binding.SupportsOAuth,
+			Transport:                  transport,
+			Priority:                   binding.Priority,
+			Routable:                   binding.Routable,
+			SupportsMCP:                binding.SupportsMCP,
+			SupportsOAuth:              binding.SupportsOAuth,
+			SupportsSessionTermination: binding.SupportsSessionTermination,
 		}
 		originalByCanonical[canonical] = binding.Channel
 	}

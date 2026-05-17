@@ -62,5 +62,11 @@ type OauthDiscoveryCommand interface {
 	IsOAuthDiscovery() bool
 }
 
+// SessionTerminationCommand is a marker interface for explicit Streamable HTTP session cleanup.
+type SessionTerminationCommand interface {
+	PolledCommand
+	IsSessionTermination() bool
+}
+
 // PolledCommandQueue carries polled commands between the control plane poller and dispatcher.
 type PolledCommandQueue chan PolledCommand

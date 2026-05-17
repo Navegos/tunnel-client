@@ -48,11 +48,12 @@ type Processor interface {
 // on the main channel only because OAuth discovery is derived from the primary
 // MCP server URL rather than arbitrary auxiliary channels.
 type ChannelBinding struct {
-	Transport     mcpclient.ForwardingTransport
-	Priority      int
-	Routable      func() bool
-	SupportsMCP   bool
-	SupportsOAuth bool
+	Transport                  mcpclient.ForwardingTransport
+	Priority                   int
+	Routable                   func() bool
+	SupportsMCP                bool
+	SupportsOAuth              bool
+	SupportsSessionTermination bool
 }
 
 type processorParams struct {
@@ -81,8 +82,9 @@ type mcpProcessor struct {
 }
 
 type channelFeatures struct {
-	supportsMCP   bool
-	supportsOAuth bool
+	supportsMCP                bool
+	supportsOAuth              bool
+	supportsSessionTermination bool
 }
 
 type channelConfig struct {
@@ -177,8 +179,9 @@ func NewProcessor(p processorParams) (Processor, error) {
 		channels[channelName] = channelConfig{
 			transport: binding.Transport,
 			features: channelFeatures{
-				supportsMCP:   binding.SupportsMCP,
-				supportsOAuth: binding.SupportsOAuth,
+				supportsMCP:                binding.SupportsMCP,
+				supportsOAuth:              binding.SupportsOAuth,
+				supportsSessionTermination: binding.SupportsSessionTermination,
 			},
 			priority: binding.Priority,
 			routable: binding.Routable,
@@ -293,6 +296,8 @@ func (p *mcpProcessor) Process(ctx context.Context, cmd controlplane.PolledComma
 			return p.rejectUnsupportedChannel(ctx, logger, cmd, channel)
 		}
 		return p.processOauthDiscoveryCommand(ctx, logger, typedCmd, channel)
+	case controlplane.SessionTerminationCommand:
+		return p.processSessionTerminationCommand(ctx, logger, typedCmd, channelCfg, channel)
 	default:
 		logger.ErrorContext(ctx, "polled command was not a JSON-RPC command")
 		return fmt.Errorf("unexpected command type %T", cmd)
@@ -313,6 +318,8 @@ func (p *mcpProcessor) rejectUnsupportedChannel(ctx context.Context, logger *slo
 		attrs = append(attrs, attribute.String("command_type", "jsonrpc"))
 	case controlplane.OauthDiscoveryCommand:
 		attrs = append(attrs, attribute.String("command_type", "oauth_discovery"))
+	case controlplane.SessionTerminationCommand:
+		attrs = append(attrs, attribute.String("command_type", "session_termination"))
 	default:
 		attrs = append(attrs, attribute.String("command_type", "unknown"))
 	}
@@ -341,6 +348,8 @@ func (p *mcpProcessor) rejectUnsupportedChannel(ctx context.Context, logger *slo
 			return fmt.Errorf("encode channel error response: %w", encodeErr)
 		}
 		response = types.NewOAuthDiscoveryResponse(channel, payload, statusCode, http.Header{})
+	case controlplane.SessionTerminationCommand:
+		response = types.NewSessionTerminationResponse(channel, statusCode, http.Header{})
 	}
 
 	if response == nil {
@@ -415,8 +424,6 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 		logger.WarnContext(ctx, "dispatcher failed to connect to MCP transport; posted error response to control plane", attrs...)
 		return nil
 	}
-
-	//TODO(denyska): upon receiving SessionTermination command, issue conn.Close() that will do DELETE
 
 	headers := ensureDefaultAcceptHeader(cmd.Headers())
 	statusCode, respHeader, err := conn.Write(ctx, headers, req)
@@ -504,6 +511,77 @@ func (p *mcpProcessor) processJsonRpcCommand(ctx context.Context, logger *slog.L
 	p.forwardResponses(ctx, conn, logger, cmd, statusCode, respHeader, requestKindAttrs, latencyRecorded, channel)
 	logger.InfoContext(ctx, "dispatcher forwarded command to MCP server")
 
+	return nil
+}
+
+func (p *mcpProcessor) processSessionTerminationCommand(ctx context.Context, logger *slog.Logger, cmd controlplane.SessionTerminationCommand, channelCfg channelConfig, channel types.Channel) error {
+	requestKindAttrs := []attribute.KeyValue{
+		attribute.String("request_kind", "session_termination"),
+		attribute.String("channel", channel.String()),
+	}
+	latencyRecorded := &latencyFlags{}
+
+	if !channelCfg.features.supportsSessionTermination {
+		tunnelResponse := types.NewSessionTerminationResponse(channel, http.StatusMethodNotAllowed, http.Header{})
+		tsRequestID, postErr := p.tunnelResponder.PostResponse(ctx, cmd.RequestID(), tunnelResponse)
+		if postErr != nil {
+			attrs := []any{slog.String("error", postErr.Error())}
+			if tsRequestID != "" {
+				attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+			}
+			logger.ErrorContext(ctx, "failed to post unsupported session termination response to control plane", attrs...)
+			return postErr
+		}
+
+		p.metrics.recordCommandLatencies(ctx, p.tunnelID, http.StatusMethodNotAllowed, requestKindAttrs, cmd.EnqueuedAt(), cmd.PolledAt(), latencyRecorded)
+		attrs := []any{
+			slog.Int("status_code", http.StatusMethodNotAllowed),
+			slog.String("channel", channel.String()),
+		}
+		if tsRequestID != "" {
+			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+		}
+		logger.WarnContext(ctx, "dispatcher rejected MCP session termination for unsupported transport", attrs...)
+		return nil
+	}
+
+	terminator, ok := channelCfg.transport.(mcpclient.SessionTerminatingTransport)
+	if !ok {
+		return fmt.Errorf("dispatcher processor: MCP transport does not support session termination")
+	}
+
+	statusCode, respHeader, err := terminator.TerminateSession(ctx, cmd.Headers())
+	statusCode = normalizeTransportStatusCode(statusCode, err)
+	if respHeader == nil {
+		respHeader = http.Header{}
+	}
+	tunnelResponse := types.NewSessionTerminationResponse(channel, statusCode, respHeader)
+	tsRequestID, postErr := p.tunnelResponder.PostResponse(ctx, cmd.RequestID(), tunnelResponse)
+	if postErr != nil {
+		attrs := []any{slog.String("error", postErr.Error())}
+		if tsRequestID != "" {
+			attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+		}
+		logger.ErrorContext(ctx, "failed to post session termination response to control plane", attrs...)
+		return postErr
+	}
+
+	p.metrics.recordCommandLatencies(ctx, p.tunnelID, statusCode, requestKindAttrs, cmd.EnqueuedAt(), cmd.PolledAt(), latencyRecorded)
+	attrs := []any{
+		slog.Int("status_code", statusCode),
+		slog.String("channel", channel.String()),
+	}
+	if err != nil {
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+	if tsRequestID != "" {
+		attrs = append(attrs, slog.String(tclog.FieldTunnelServiceRequestID, tsRequestID.String()))
+	}
+	if statusCode >= http.StatusBadRequest || err != nil {
+		logger.WarnContext(ctx, "dispatcher received MCP session termination upstream error; posted response to control plane", attrs...)
+		return nil
+	}
+	logger.InfoContext(ctx, "dispatcher terminated MCP session and posted response to control plane", attrs...)
 	return nil
 }
 

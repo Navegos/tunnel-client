@@ -24,6 +24,8 @@ const (
 	// ResponseTypeOAuthDiscovery indicates the payload contains OAuth discovery
 	// metadata fetched from the MCP server.
 	ResponseTypeOAuthDiscovery
+	// ResponseTypeSessionTermination indicates the payload reports an explicit session close.
+	ResponseTypeSessionTermination
 )
 
 // TunnelResponse bundles the MCP response metadata (status code + headers) with
@@ -84,6 +86,16 @@ func NewNotificationAck(channel Channel, code int, headers http.Header) *TunnelR
 	}
 }
 
+// NewSessionTerminationResponse constructs a TunnelResponse representing explicit session cleanup.
+func NewSessionTerminationResponse(channel Channel, code int, headers http.Header) *TunnelResponse {
+	return &TunnelResponse{
+		headers:      cloneHeaders(headers),
+		responseCode: code,
+		responseType: ResponseTypeSessionTermination,
+		channel:      channel,
+	}
+}
+
 // Payload returns the raw JSON payload for the response.
 func (t *TunnelResponse) Payload() json.RawMessage {
 	return t.response
@@ -120,9 +132,9 @@ func (t *TunnelResponse) Validate() error {
 	}
 
 	switch t.responseType {
-	case ResponseTypeNotificationAcknowledgment:
+	case ResponseTypeNotificationAcknowledgment, ResponseTypeSessionTermination:
 		if len(t.response) > 0 {
-			return errors.New("notification acknowledgments must not include a jsonrpc response")
+			return errors.New("ack-only responses must not include a jsonrpc response")
 		}
 	case ResponseTypeJSONRPCNotification:
 		if len(t.response) == 0 {
