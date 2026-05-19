@@ -932,7 +932,8 @@ type warnCaptureHandler struct {
 func (h *warnCaptureHandler) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h *warnCaptureHandler) Handle(_ context.Context, r slog.Record) error {
-	if r.Level == slog.LevelWarn && r.Message == "control-plane extra header overrides existing header" {
+	if r.Level == slog.LevelWarn && (r.Message == "control-plane extra header overrides existing header" ||
+		r.Message == "control-plane extra header cannot override protected header") {
 		h.seenOverride = true
 		r.Attrs(func(a slog.Attr) bool {
 			if a.Key == "header" {
@@ -947,7 +948,7 @@ func (h *warnCaptureHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *warnCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *warnCaptureHandler) WithGroup(string) slog.Handler        { return h }
 
-func TestTunnelServiceClientExtraHeadersWarnOnOverride(t *testing.T) {
+func TestTunnelServiceClientExtraHeadersCannotOverrideProtectedHeaders(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -956,9 +957,8 @@ func TestTunnelServiceClientExtraHeadersWarnOnOverride(t *testing.T) {
 	)
 
 	server := newHTTPTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Default Accept header should be overridden by extra header.
-		if got := r.Header.Get("Accept"); got != "application/problem+json" {
-			t.Fatalf("expected overridden Accept header, got %q", got)
+		if got := r.Header.Get("Accept"); got != "application/json" {
+			t.Fatalf("expected protected Accept header to be preserved, got %q", got)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -978,7 +978,7 @@ func TestTunnelServiceClientExtraHeadersWarnOnOverride(t *testing.T) {
 
 	_, _, err = client.Poll(context.Background(), 1)
 	assert.NoError(t, err, "Poll should succeed with extra headers enabled")
-	assert.True(t, handler.seenOverride, "expected warning when extra header overrides existing header")
+	assert.True(t, handler.seenOverride, "expected warning when extra header attempts to override a protected header")
 	assert.Equal(t, "Accept", handler.header, "expected warning for Accept header")
 }
 

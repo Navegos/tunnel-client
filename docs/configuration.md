@@ -283,6 +283,9 @@ tunnel-client profiles add corp-proxy --sample sample_mcp_enterprise_proxy --tun
   - YAML: `control_plane.extra_headers`
   - Header values accept `env:VARNAME` and `file:/path/to/secret`; all other
     values are treated literally.
+  - Reserved control-plane headers (`Authorization`, `Accept`, `User-Agent`,
+    `X-Tunnel-Client-Name`, and `X-Tunnel-Client-Version`) are managed by the
+    client and cannot be overridden by extra headers.
 
 ## TLS trust (custom CA bundle)
 

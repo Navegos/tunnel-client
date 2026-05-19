@@ -296,6 +296,9 @@ func validateFileConfigSyntax(c fileConfig) error {
 	if err := validateHeaderReferenceSyntax("control_plane.extra_headers", c.ControlPlane.ExtraHeaders); err != nil {
 		return err
 	}
+	if err := validateControlPlaneExtraHeaders("control_plane.extra_headers", c.ControlPlane.ExtraHeaders); err != nil {
+		return err
+	}
 	if err := validateConfigValueReferenceSyntax("health.listen_addr", c.Health.ListenAddr); err != nil {
 		return err
 	}

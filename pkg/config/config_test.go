@@ -1994,6 +1994,66 @@ func TestBuildControlPlaneExtraHeadersResolvesEnvAndFileValues(t *testing.T) {
 	}
 }
 
+func TestBuildControlPlaneExtraHeadersRejectsReservedHeaders(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name      string
+		flagValue string
+		envValue  string
+	}{
+		{name: "authorization from flag", flagValue: "Authorization: Bearer attacker"},
+		{name: "user agent from flag", flagValue: "User-Agent: custom-agent"},
+		{name: "client version from flag", flagValue: "X-Tunnel-Client-Version: dev"},
+		{name: "authorization from env", envValue: "authorization: Bearer attacker"},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			RegisterFlags(fs)
+			lookup := func(string) (string, bool) { return "", false }
+			if tc.flagValue != "" {
+				if err := fs.Parse([]string{`--control-plane.extra-headers`, tc.flagValue}); err != nil {
+					t.Fatalf("flag parse failed: %v", err)
+				}
+			}
+			if tc.envValue != "" {
+				lookup = lookupEnvMap(map[string]string{"CONTROL_PLANE_EXTRA_HEADERS": tc.envValue})
+			}
+
+			_, err := buildControlPlaneExtraHeaders(fs, lookup)
+			if err == nil {
+				t.Fatalf("expected reserved control-plane header to be rejected")
+			}
+			if !strings.Contains(err.Error(), "cannot override control-plane authentication") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateFileConfigSyntaxRejectsReservedControlPlaneExtraHeaders(t *testing.T) {
+	t.Parallel()
+
+	err := validateFileConfigSyntax(fileConfig{
+		ControlPlane: fileControlPlaneConfig{
+			ExtraHeaders: map[string]string{
+				"Authorization": "Bearer attacker",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected reserved YAML control-plane header to be rejected")
+	}
+	if !strings.Contains(err.Error(), "cannot override control-plane authentication") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildMCPExtraHeadersFromEnvAndFlags(t *testing.T) {
 	t.Parallel()
 

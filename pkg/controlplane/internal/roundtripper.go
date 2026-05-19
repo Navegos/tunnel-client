@@ -56,6 +56,14 @@ func (c *controlPlaneRoundTripper) applyExtraHeaders(ctx context.Context, header
 	}
 
 	for k, v := range c.extraHeaders {
+		if isProtectedControlPlaneHeader(k) {
+			c.logger.WarnContext(
+				ctx,
+				"control-plane extra header cannot override protected header",
+				slog.String("header", k),
+			)
+			continue
+		}
 		if existing := headers.Get(k); existing != "" && existing != v {
 			c.logger.WarnContext(
 				ctx,
@@ -64,5 +72,14 @@ func (c *controlPlaneRoundTripper) applyExtraHeaders(ctx context.Context, header
 			)
 		}
 		headers.Set(k, v)
+	}
+}
+
+func isProtectedControlPlaneHeader(key string) bool {
+	switch http.CanonicalHeaderKey(key) {
+	case "Authorization", "Accept", "User-Agent", headerTunnelClientName, headerTunnelClientVersion:
+		return true
+	default:
+		return false
 	}
 }

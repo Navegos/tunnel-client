@@ -58,7 +58,34 @@ func TestControlPlaneRoundTripperWarnsOnOverride(t *testing.T) {
 
 	rt := newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
-	}), "api-key", "ua", map[string]string{"Accept": "application/problem+json"}, logger)
+	}), "api-key", "ua", map[string]string{"X-Debug": "new"}, logger)
+
+	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
+	if !assert.NoError(t, err, "build request") {
+		return
+	}
+	req.Header.Set("X-Debug", "original")
+
+	_, err = rt.RoundTrip(req)
+	assert.NoError(t, err, "round trip failed")
+	assert.True(t, handler.seenOverride, "expected override warning")
+	assert.Equal(t, "X-Debug", handler.header, "expected warning for X-Debug header")
+	assert.Equal(t, "new", req.Header.Get("X-Debug"), "expected override to apply")
+}
+
+func TestControlPlaneRoundTripperPreservesProtectedHeaders(t *testing.T) {
+	t.Parallel()
+
+	handler := &warnCaptureHandler{}
+	logger := slog.New(handler)
+
+	rt := newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	}), "api-key", "ua", map[string]string{
+		"authorization":           "Bearer attacker",
+		"User-Agent":              "custom-agent",
+		headerTunnelClientVersion: "dev",
+	}, logger)
 
 	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
 	if !assert.NoError(t, err, "build request") {
@@ -67,9 +94,10 @@ func TestControlPlaneRoundTripperWarnsOnOverride(t *testing.T) {
 
 	_, err = rt.RoundTrip(req)
 	assert.NoError(t, err, "round trip failed")
-	assert.True(t, handler.seenOverride, "expected override warning")
-	assert.Equal(t, "Accept", handler.header, "expected warning for Accept header")
-	assert.Equal(t, "application/problem+json", req.Header.Get("Accept"), "expected override to apply")
+	assert.True(t, handler.seenOverride, "expected protected-header warning")
+	assert.Equal(t, "Bearer api-key", req.Header.Get("Authorization"), "expected Authorization to be preserved")
+	assert.Equal(t, "ua", req.Header.Get("User-Agent"), "expected User-Agent to be preserved")
+	assert.Equal(t, version.Version, req.Header.Get(headerTunnelClientVersion), "expected client version to be preserved")
 }
 
 func TestControlPlaneRoundTripperNoWarningWhenValueMatches(t *testing.T) {
@@ -80,17 +108,18 @@ func TestControlPlaneRoundTripperNoWarningWhenValueMatches(t *testing.T) {
 
 	rt := newControlPlaneRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
-	}), "api-key", "ua", map[string]string{"Accept": "application/json"}, logger)
+	}), "api-key", "ua", map[string]string{"X-Same": "same"}, logger)
 
 	req, err := http.NewRequest(http.MethodGet, "https://example.com", nil)
 	if !assert.NoError(t, err, "build request") {
 		return
 	}
+	req.Header.Set("X-Same", "same")
 
 	_, err = rt.RoundTrip(req)
 	assert.NoError(t, err, "round trip failed")
 	assert.False(t, handler.seenOverride, "did not expect override warning for identical value")
-	assert.Equal(t, "application/json", req.Header.Get("Accept"))
+	assert.Equal(t, "same", req.Header.Get("X-Same"))
 }
 
 func TestNewControlPlaneRoundTripperPanicsOnNilLogger(t *testing.T) {

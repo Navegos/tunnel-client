@@ -874,7 +874,32 @@ func controlPlaneBaseURLRaw(fs *pflag.FlagSet, lookupEnv func(string) (string, b
 //
 //	CONTROL_PLANE_EXTRA_HEADERS="extra-header: env:EXTRA_HEADER, debug: 1"
 func buildControlPlaneExtraHeaders(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) (map[string]string, error) {
-	return buildExtraHeaders(fs, lookupEnv, "control-plane.extra-headers", "CONTROL_PLANE_EXTRA_HEADERS")
+	headers, err := buildExtraHeaders(fs, lookupEnv, "control-plane.extra-headers", "CONTROL_PLANE_EXTRA_HEADERS")
+	if err != nil {
+		return nil, err
+	}
+	if err := validateControlPlaneExtraHeaders("control-plane.extra-headers", headers); err != nil {
+		return nil, err
+	}
+	return headers, nil
+}
+
+func validateControlPlaneExtraHeaders(source string, headers map[string]string) error {
+	for key := range headers {
+		if isReservedControlPlaneHeader(key) {
+			return fmt.Errorf("%s %q cannot override control-plane authentication or client metadata headers", source, key)
+		}
+	}
+	return nil
+}
+
+func isReservedControlPlaneHeader(key string) bool {
+	switch httpHeaderKey := strings.ToLower(strings.TrimSpace(key)); httpHeaderKey {
+	case "authorization", "accept", "user-agent", "x-tunnel-client-name", "x-tunnel-client-version":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildExtraHeaders(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), flagName, envName string) (map[string]string, error) {
