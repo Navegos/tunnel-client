@@ -20,7 +20,8 @@ streaming, and troubleshooting details, see [`connectors.md`](connectors.md).
 
 Use these exact setup pages when you need to create or inspect those values:
 
-- Tunnels management: `https://platform.openai.com/settings/organization/tunnels`
+- Tunnels management and supported tunnel-client download:
+  `https://platform.openai.com/settings/organization/tunnels`
 - Organization roles: `https://platform.openai.com/settings/organization/people/roles`
 - Organization groups: `https://platform.openai.com/settings/organization/people/groups`
 - Runtime API keys: `https://platform.openai.com/settings/organization/api-keys`
@@ -95,6 +96,11 @@ create the tunnel yourself in Tunnels management or with
 `CONTROL_PLANE_API_KEY`. Create or verify the connector from the ChatGPT
 settings URL above only while `tunnel-client run ...` is healthy, and keep the
 daemon running for connector discovery and every MCP call from ChatGPT.
+
+The Platform Tunnels page download button is sourced from tunnel-service's
+gated tunnel metadata response. When a new public tunnel-client release becomes
+the supported download, update tunnel-service's hard-coded public artifact URL
+alongside the release handoff.
 
 Other fast starts:
 
