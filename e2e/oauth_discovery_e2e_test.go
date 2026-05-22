@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -148,6 +149,7 @@ func TestOAuthDiscoveryRegistersCustomerHostRegistrationEndpointE2E(t *testing.T
 	)
 	customerBase := "http://" + customerHost
 	idpTokenEndpoint := idpIssuer + "/v1/token"
+	harpoonOAuthTargetsReady := make(chan struct{})
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -367,6 +369,7 @@ func TestOAuthDiscoveryRegistersCustomerHostRegistrationEndpointE2E(t *testing.T
 				"Content-Type": []string{"application/json"},
 			},
 		),
+		DeliverAfter: harpoonOAuthTargetsReady,
 		ExpectedResponses: []mocktunnelservice.ExpectedResponse{{
 			RequestID: harpoonListID,
 			Assert: func(tb testing.TB, resp mocktunnelservice.ReceivedResponse) {
@@ -419,6 +422,7 @@ func TestOAuthDiscoveryRegistersCustomerHostRegistrationEndpointE2E(t *testing.T
 		harnesspkg.WithPreserveClientURLs(),
 		harnesspkg.WithClientConfig(func(cfg *config.Config) {
 			cfg.Logging.Level = slog.LevelDebug
+			cfg.ControlPlane.PollTimeout = time.Second
 			cfg.MCP.TransportKind = config.MCPTransportHTTPStreamable
 			cfg.MCP.ServerURL = mustParseURL(t, customerBase+"/mcp")
 			cfg.MCP.HTTPProxy = mustParseURL(t, proxy.URL())
@@ -450,6 +454,25 @@ func TestOAuthDiscoveryRegistersCustomerHostRegistrationEndpointE2E(t *testing.T
 				harpoonCallAuthMetadata,
 			),
 		),
+		harnesspkg.WithAfterClientStart(func(h *harnesspkg.Harness) {
+			t.Helper()
+			if h.HarpoonRegistry == nil {
+				t.Fatal("harpoon registry not populated")
+			}
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				for _, label := range []string{
+					"oauth-auth-server-metadata-0",
+					"oauth-registration-endpoint-0",
+				} {
+					if _, err := h.HarpoonRegistry.WaitForTarget(ctx, label); err != nil {
+						t.Errorf("wait for harpoon target %q: %v", label, err)
+					}
+				}
+				close(harpoonOAuthTargetsReady)
+			}()
+		}),
 		harnesspkg.WithScenarioTimeout(10*time.Second),
 	)
 

@@ -1,10 +1,12 @@
 package harpoon
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -67,6 +69,51 @@ func TestRegistryResolveReturnsExactTargetURL(t *testing.T) {
 	resolved, err := registry.Resolve("svc")
 	require.NoError(t, err)
 	require.Equal(t, "https://example.com/bla?x=1#frag", resolved.String())
+}
+
+func TestRegistryWaitForTargetReturnsRegisteredTarget(t *testing.T) {
+	registry, err := NewRegistry(discardLogger(), true, nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	resultCh := make(chan Target, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		target, waitErr := registry.WaitForTarget(ctx, "auth")
+		if waitErr != nil {
+			errCh <- waitErr
+			return
+		}
+		resultCh <- target
+	}()
+
+	require.NoError(t, registry.RegisterTarget(Target{
+		Label:   "auth",
+		BaseURL: mustURL(t, "https://example.com/auth"),
+	}))
+
+	select {
+	case waitErr := <-errCh:
+		require.NoError(t, waitErr)
+	case target := <-resultCh:
+		require.Equal(t, "auth", target.Label)
+		require.Equal(t, "https://example.com/auth", target.BaseURL.String())
+	case <-ctx.Done():
+		t.Fatal("wait for target did not complete")
+	}
+}
+
+func TestRegistryWaitForTargetReturnsContextError(t *testing.T) {
+	registry, err := NewRegistry(discardLogger(), true, nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = registry.WaitForTarget(ctx, "auth")
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestRegistryAllowsURLUsesExactMatchExceptSchemeHostCase(t *testing.T) {

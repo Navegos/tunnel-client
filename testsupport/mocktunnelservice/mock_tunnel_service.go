@@ -179,6 +179,7 @@ type polledCommandEnvelope struct {
 type CommandResponse struct {
 	Command           json.RawMessage
 	CommandMutator    CommandMutator
+	DeliverAfter      <-chan struct{}
 	ExpectedResponses []ExpectedResponse
 }
 
@@ -187,6 +188,7 @@ type scriptedCommand struct {
 	expected      []ExpectedResponse
 	responseIndex int
 	mutator       CommandMutator
+	deliverAfter  <-chan struct{}
 	delivered     bool
 	completed     bool
 }
@@ -332,7 +334,12 @@ func (m *MockTunnelService) appendCommandResponses(commands ...CommandResponse) 
 			}
 			normalizedExpected[i] = expected
 		}
-		slot := &scriptedCommand{command: cmd, expected: normalizedExpected, mutator: mutator}
+		slot := &scriptedCommand{
+			command:      cmd,
+			expected:     normalizedExpected,
+			mutator:      mutator,
+			deliverAfter: entry.DeliverAfter,
+		}
 		m.script = append(m.script, slot)
 	}
 	m.signalStateChangeLocked()
@@ -654,10 +661,13 @@ func (m *MockTunnelService) handlePoll(w http.ResponseWriter, r *http.Request) {
 	defer timer.Stop()
 	for {
 		m.mu.Lock()
-		cmd, ok := m.nextCommandLocked()
+		cmd, blockedOn, ok := m.nextCommandLocked()
 		var state <-chan struct{}
 		if !ok {
-			state = m.stateCh
+			state = blockedOn
+			if state == nil {
+				state = m.stateCh
+			}
 		}
 		m.mu.Unlock()
 		if ok {
@@ -739,16 +749,19 @@ func (m *MockTunnelService) handleResponse(w http.ResponseWriter, r *http.Reques
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-func (m *MockTunnelService) nextCommandLocked() (json.RawMessage, bool) {
+func (m *MockTunnelService) nextCommandLocked() (json.RawMessage, <-chan struct{}, bool) {
 	for i, slot := range m.script {
 		if slot.completed {
 			continue
 		}
 		if slot.delivered {
 			// waiting for response; no further commands until completed
-			return nil, false
+			return nil, nil, false
 		}
 		if i == 0 || m.script[i-1].completed {
+			if !channelClosed(slot.deliverAfter) {
+				return nil, slot.deliverAfter, false
+			}
 			slot.delivered = true
 			payload := slot.command
 			if slot.mutator != nil {
@@ -761,11 +774,11 @@ func (m *MockTunnelService) nextCommandLocked() (json.RawMessage, bool) {
 			cmd := cloneJSON(payload)
 			m.delivered = append(m.delivered, cloneJSON(cmd))
 			m.signalStateChangeLocked()
-			return cmd, true
+			return cmd, nil, true
 		}
-		return nil, false
+		return nil, nil, false
 	}
-	return nil, false
+	return nil, nil, false
 }
 
 func (m *MockTunnelService) nextResponseSlotLocked() *scriptedCommand {
@@ -792,6 +805,18 @@ func (m *MockTunnelService) signalStateChangeLocked() {
 	}
 	close(m.stateCh)
 	m.stateCh = make(chan struct{})
+}
+
+func channelClosed(ch <-chan struct{}) bool {
+	if ch == nil {
+		return true
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *MockTunnelService) writeCommandEnvelope(w http.ResponseWriter, commands []json.RawMessage) {

@@ -479,6 +479,64 @@ func TestMockTunnelServicePollTimeoutReturnsEmptyCommands(t *testing.T) {
 	}
 }
 
+func TestMockTunnelServiceWaitsForCommandDeliveryGate(t *testing.T) {
+	t.Parallel()
+
+	ready := make(chan struct{})
+	mock := NewMockTunnelService(
+		WithTunnelID("cli-tunnel"),
+		WithAPIKey("test-api-key"),
+		WithPollWaitLimit(10*time.Millisecond),
+		WithAllowPendingCommands(),
+		WithCommandResponses(CommandResponse{
+			Command:      NewCommand("cmd-1", json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"ping"}`), nil),
+			DeliverAfter: ready,
+			ExpectedResponses: []ExpectedResponse{{
+				RequestID: "cmd-1",
+			}},
+		}),
+	)
+	mock.Start(t)
+
+	baseURL := mock.BaseURL()
+	if baseURL == nil {
+		t.Fatal("mock did not expose a base URL")
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	firstPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	firstPollResp, err := client.Do(firstPollReq)
+	if err != nil {
+		t.Fatalf("execute first poll: %v", err)
+	}
+	defer func() { _ = firstPollResp.Body.Close() }()
+
+	var firstEnvelope wiretypes.PolledCommandEnvelope
+	if err := json.NewDecoder(firstPollResp.Body).Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first poll payload: %v", err)
+	}
+	if len(firstEnvelope.Commands) != 0 {
+		t.Fatalf("expected gated command to remain pending, got %d command(s)", len(firstEnvelope.Commands))
+	}
+
+	close(ready)
+
+	secondPollReq := newTunnelRequest(t, http.MethodGet, baseURL, &url.URL{Path: "/v1/tunnel/cli-tunnel/poll"}, mock, nil)
+	secondPollResp, err := client.Do(secondPollReq)
+	if err != nil {
+		t.Fatalf("execute second poll: %v", err)
+	}
+	defer func() { _ = secondPollResp.Body.Close() }()
+
+	var secondEnvelope wiretypes.PolledCommandEnvelope
+	if err := json.NewDecoder(secondPollResp.Body).Decode(&secondEnvelope); err != nil {
+		t.Fatalf("decode second poll payload: %v", err)
+	}
+	if len(secondEnvelope.Commands) != 1 {
+		t.Fatalf("expected gated command after readiness, got %d command(s)", len(secondEnvelope.Commands))
+	}
+}
+
 func TestMockTunnelServiceBlocksUntilResponseBeforeDeliveringNextCommand(t *testing.T) {
 	t.Parallel()
 

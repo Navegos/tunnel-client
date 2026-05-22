@@ -18,6 +18,7 @@ import (
 
 	"go.openai.org/api/tunnel-client/pkg/app"
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/harpoon"
 	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
 	"go.openai.org/api/tunnel-client/pkg/types"
 	"go.openai.org/api/tunnel-client/testsupport/mockmcpserver"
@@ -37,6 +38,7 @@ type harnessConfig struct {
 	useHarpoonTransport bool
 	preserveClientURLs  bool
 	beforeClientStart   func(*Harness)
+	afterClientStart    func(*Harness)
 }
 
 // HarnessOption customizes the E2E harness configuration.
@@ -91,6 +93,13 @@ func WithBeforeClientStart(fn func(*Harness)) HarnessOption {
 	}
 }
 
+// WithAfterClientStart registers a hook that runs after tunnel-client starts.
+func WithAfterClientStart(fn func(*Harness)) HarnessOption {
+	return func(cfg *harnessConfig) {
+		cfg.afterClientStart = fn
+	}
+}
+
 // WithScenarioTimeout overrides the time ExecuteScenarious waits for the
 // scripted tunnel commands to drain before failing the test.
 func WithScenarioTimeout(timeout time.Duration) HarnessOption {
@@ -133,19 +142,21 @@ func WithMCPCommand(commandArgs []string) HarnessOption {
 
 // Harness wires together the mock control plane, mock MCP server, and a running tunnel-client.
 type Harness struct {
-	ControlPlane  *mocktunnelservice.MockTunnelService
-	MCP           *mockmcpserver.MockMCPServer
-	cfg           *config.Config
-	app           *fxtest.App
-	waitTimeout   time.Duration
-	tunnelStarted bool
-	mcpStarted    bool
-	inMemoryMCP   *mcp.InMemoryTransport
-	useHarpoon    bool
-	preserveURLs  bool
-	beforeStart   func(*Harness)
-	logWriter     io.Writer
-	logBuffer     *bytes.Buffer
+	ControlPlane    *mocktunnelservice.MockTunnelService
+	MCP             *mockmcpserver.MockMCPServer
+	HarpoonRegistry *harpoon.Registry
+	cfg             *config.Config
+	app             *fxtest.App
+	waitTimeout     time.Duration
+	tunnelStarted   bool
+	mcpStarted      bool
+	inMemoryMCP     *mcp.InMemoryTransport
+	useHarpoon      bool
+	preserveURLs    bool
+	beforeStart     func(*Harness)
+	afterStart      func(*Harness)
+	logWriter       io.Writer
+	logBuffer       *bytes.Buffer
 }
 
 // NewHarness configures the mocks and client wiring using the provided options.
@@ -218,6 +229,7 @@ func NewHarness(t testing.TB, opts ...HarnessOption) *Harness {
 		useHarpoon:   cfg.useHarpoonTransport,
 		preserveURLs: cfg.preserveClientURLs,
 		beforeStart:  cfg.beforeClientStart,
+		afterStart:   cfg.afterClientStart,
 		logWriter:    logWriter,
 		logBuffer:    &logBuf,
 	}
@@ -237,6 +249,9 @@ func (h *Harness) ExecuteScenarious(t testing.TB) {
 		h.beforeStart(h)
 	}
 	h.startClient(t)
+	if h.afterStart != nil {
+		h.afterStart(h)
+	}
 	timeout := h.waitTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Second
@@ -262,6 +277,9 @@ func (h *Harness) ExecuteScenario(t testing.TB) error {
 		h.beforeStart(h)
 	}
 	h.startClient(t)
+	if h.afterStart != nil {
+		h.afterStart(h)
+	}
 	timeout := h.waitTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Second
@@ -397,6 +415,7 @@ func (h *Harness) startClient(t testing.TB) {
 	options := []fx.Option{
 		fx.Provide(func() io.Writer { return logWriter }),
 		fx.WithLogger(func(*slog.Logger) fxevent.Logger { return fxevent.NopLogger }),
+		fx.Populate(&h.HarpoonRegistry),
 	}
 	if h.useHarpoon {
 		options = append(options, fx.Provide(fx.Annotate(

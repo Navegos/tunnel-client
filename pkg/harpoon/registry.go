@@ -1,6 +1,7 @@
 package harpoon
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -38,6 +39,7 @@ type Registry struct {
 	explainCacheLimit int
 	explainCache      map[string]redirectExplainCacheEntry
 	explainCacheOrder []string
+	stateCh           chan struct{}
 }
 
 type redirectMismatchDetails struct {
@@ -87,6 +89,7 @@ func NewRegistryWithLimit(logger *slog.Logger, allowPlaintext bool, targets []Ta
 		explainCacheLimit: defaultRedirectExplainCacheLimit,
 		explainCache:      make(map[string]redirectExplainCacheEntry),
 		explainCacheOrder: make([]string, 0, defaultRedirectExplainCacheLimit),
+		stateCh:           make(chan struct{}),
 	}
 	for _, target := range targets {
 		if err := registry.RegisterTarget(target); err != nil {
@@ -153,6 +156,7 @@ func (r *Registry) RegisterTarget(target Target) error {
 	r.ordered = append(r.ordered, cleanTarget)
 	r.targetURLKeys[normalized.String()] = struct{}{}
 	r.clearExplainCacheLocked()
+	r.signalStateChangeLocked()
 	return nil
 }
 
@@ -190,6 +194,36 @@ func (r *Registry) Lookup(label string) (Target, bool) {
 	return target, ok
 }
 
+// WaitForTarget blocks until a target with the provided label is registered or ctx expires.
+func (r *Registry) WaitForTarget(ctx context.Context, label string) (Target, error) {
+	if r == nil {
+		return Target{}, errors.New("harpoon: registry is nil")
+	}
+	if ctx == nil {
+		return Target{}, errors.New("harpoon: context is required")
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return Target{}, errors.New("harpoon: target label is required")
+	}
+
+	for {
+		r.mu.RLock()
+		target, ok := r.targets[label]
+		state := r.stateCh
+		r.mu.RUnlock()
+		if ok {
+			return target, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return Target{}, ctx.Err()
+		case <-state:
+		}
+	}
+}
+
 // Resolve returns the target URL for a label.
 func (r *Registry) Resolve(label string) (*url.URL, error) {
 	target, ok := r.Lookup(label)
@@ -201,6 +235,15 @@ func (r *Registry) Resolve(label string) (*url.URL, error) {
 	}
 	resolved := *target.BaseURL
 	return &resolved, nil
+}
+
+func (r *Registry) signalStateChangeLocked() {
+	if r.stateCh == nil {
+		r.stateCh = make(chan struct{})
+		return
+	}
+	close(r.stateCh)
+	r.stateCh = make(chan struct{})
 }
 
 // AllowsURL reports whether the URL exactly matches any registered target after
