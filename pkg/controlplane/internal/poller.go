@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jpillora/backoff"
+	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/controlplane"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -20,7 +21,6 @@ const (
 	defaultQueueFullDelay = 100 * time.Millisecond
 	defaultBackoffMin     = 200 * time.Millisecond
 	defaultBackoffMax     = 10 * time.Second
-	defaultPollerTimeout  = 30 * time.Second
 	maxPollBatchSize      = 25
 
 	dropReasonInvalidCommandType = "invalid_command_type"
@@ -48,6 +48,7 @@ type poller struct {
 	backoff        *backoff.Backoff
 	queueFullDelay time.Duration
 	pollTimeout    time.Duration
+	pollGuardrail  time.Duration
 	metrics        *pollerMetrics
 	hadPollError   bool
 }
@@ -56,7 +57,7 @@ type poller struct {
 // backpressure handling. A nil logger defaults to slog.Default(). backoffMin /
 // backoffMax override the default retry window when non-zero; zero values
 // preserve defaults.
-func NewPoller(q queue, fetcher controlplane.Fetcher, logger *slog.Logger, meter metric.Meter, pollTimeout time.Duration, backoffMin, backoffMax time.Duration) (Poller, error) {
+func NewPoller(q queue, fetcher controlplane.Fetcher, logger *slog.Logger, meter metric.Meter, pollTimeout, pollDeadlineGuardrail, backoffMin, backoffMax time.Duration) (Poller, error) {
 	if q == nil {
 		return nil, fmt.Errorf("controlplane internal poller: queue cannot be nil")
 	}
@@ -66,9 +67,12 @@ func NewPoller(q queue, fetcher controlplane.Fetcher, logger *slog.Logger, meter
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if pollTimeout <= 0 {
-		pollTimeout = defaultPollerTimeout
+	pollConfig := config.ControlPlaneConfig{
+		PollTimeout:           pollTimeout,
+		PollDeadlineGuardrail: pollDeadlineGuardrail,
 	}
+	pollTimeout = pollConfig.PollTimeoutOrDefault()
+	pollDeadlineGuardrail = pollConfig.PollDeadlineGuardrailOrDefault()
 
 	minBackoff := defaultBackoffMin
 	if backoffMin > 0 {
@@ -91,6 +95,7 @@ func NewPoller(q queue, fetcher controlplane.Fetcher, logger *slog.Logger, meter
 		},
 		queueFullDelay: defaultQueueFullDelay,
 		pollTimeout:    pollTimeout,
+		pollGuardrail:  pollDeadlineGuardrail,
 	}
 	if m, err := newPollerMetrics(meter, q); err != nil {
 		return nil, err
@@ -131,7 +136,11 @@ func (p *poller) Run(ctx context.Context) {
 		p.metrics.totalCyclesStarted.Add(ctx, 1)
 
 		pollStart := time.Now()
-		pollCtx, cancel := context.WithTimeout(ctx, p.pollTimeout)
+		pollDeadline := (config.ControlPlaneConfig{
+			PollTimeout:           p.pollTimeout,
+			PollDeadlineGuardrail: p.pollGuardrail,
+		}).PollDeadlineTimeoutOrDefault()
+		pollCtx, cancel := context.WithTimeout(ctx, pollDeadline)
 		commands, tunnelServiceRequestID, err := p.fetcher.Poll(pollCtx, limit)
 		cancel()
 		p.metrics.pollLatency.Record(ctx, time.Since(pollStart).Seconds(), metric.WithAttributes(attribute.Bool("error", err != nil)))
@@ -165,7 +174,8 @@ func (p *poller) Run(ctx context.Context) {
 				}
 			}
 			if errors.Is(err, context.DeadlineExceeded) {
-				attrs = append(attrs, slog.Int64("poll_timeout_ms", p.pollTimeout.Milliseconds()))
+				attrs = append(attrs, slog.Int64("poll_timeout_ms", pollTimeoutMilliseconds(p.pollTimeout)))
+				attrs = append(attrs, slog.Int64("poll_deadline_ms", pollDeadline.Milliseconds()))
 				p.logger.WarnContext(ctx, "poll timed out; backing off", attrs...)
 			} else {
 				p.logger.WarnContext(ctx, "poll failed; backing off", attrs...)

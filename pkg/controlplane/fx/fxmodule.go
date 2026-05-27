@@ -84,7 +84,7 @@ func newPoller(p pollerParams) (internal.Poller, error) {
 		logger: logger,
 	}
 	meter := p.MeterProvider.Meter("controlplane")
-	return internal.NewPoller(queue, p.Fetcher, logger, meter, p.Config.PollTimeout, p.Config.PollBackoffMin, p.Config.PollBackoffMax)
+	return internal.NewPoller(queue, p.Fetcher, logger, meter, p.Config.PollTimeout, p.Config.PollDeadlineGuardrail, p.Config.PollBackoffMin, p.Config.PollBackoffMax)
 }
 
 type runnerParams struct {

@@ -99,7 +99,7 @@ func TestPollerWritesAtMostQueueCapacity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	poller, err := NewPoller(queueAdapter, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0)
+	poller, err := NewPoller(queueAdapter, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestPollerRecordsQueueDropsAndCommandAge(t *testing.T) {
 		_ = meterProvider.Shutdown(context.Background())
 	}()
 
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0)
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestPollerRecordsInvalidCommandTypeDrops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0)
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestPollerRecordsContextCanceledQueueDrops(t *testing.T) {
 		_ = meterProvider.Shutdown(context.Background())
 	}()
 
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0)
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestPollerTagsPollErrors(t *testing.T) {
 		_ = meterProvider.Shutdown(context.Background())
 	}()
 
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, 0, 0)
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestPollerDoesNotDropCommandsWhenFetcherExceedsLimit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0)
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -890,7 +890,7 @@ func TestPollerLogsRecoveryAfterError(t *testing.T) {
 		errs:   []error{errors.New("poll failed"), nil},
 		cancel: cancel,
 	}
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, time.Millisecond, 2*time.Millisecond)
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, 0, time.Millisecond, 2*time.Millisecond)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -933,7 +933,7 @@ func TestPollerLogsAPIStatusErrorDetails(t *testing.T) {
 		},
 		cancel: cancel,
 	}
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, time.Millisecond, 2*time.Millisecond)
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, 0, time.Millisecond, 2*time.Millisecond)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -959,7 +959,7 @@ func TestPollerLogsAPIStatusErrorDetails(t *testing.T) {
 	}
 }
 
-func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
+func TestPollerPollsWithGuardrailedTimeoutAndRetries(t *testing.T) {
 	queue := &chanQueue{ch: make(chan controlplane.PolledCommand, 1)}
 	fetcher := &timeoutRecordingFetcher{pollCh: make(chan struct{}, 8)}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -970,7 +970,8 @@ func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 	}()
 
 	pollTimeout := 50 * time.Millisecond
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), pollTimeout, 0, 0)
+	pollGuardrail := 10 * time.Millisecond
+	runner, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), pollTimeout, pollGuardrail, 0, 0)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -982,7 +983,7 @@ func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		poller.Run(ctx)
+		runner.Run(ctx)
 	}()
 
 	fetcher.waitForCalls(t, 2)
@@ -996,8 +997,9 @@ func TestPollerPollsWithTimeoutAndRetries(t *testing.T) {
 		t.Fatalf("expected poller to retry after timeout, got %d calls", fetcher.callCount)
 	}
 
+	pollDeadline := pollTimeout + pollGuardrail
 	for i, duration := range fetcher.durations {
-		if duration < pollTimeout/2 {
+		if duration < pollDeadline/2 {
 			t.Fatalf("call %d returned too quickly: %v", i, duration)
 		}
 	}
@@ -1013,7 +1015,7 @@ func TestPollerRetriesOnCanceledErrorWithoutStop(t *testing.T) {
 		_ = meterProvider.Shutdown(context.Background())
 	}()
 
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, time.Millisecond, 2*time.Millisecond)
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), 25*time.Millisecond, 0, time.Millisecond, 2*time.Millisecond)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}
@@ -1058,7 +1060,7 @@ func TestPollerStopsWithoutBackoffOnCancel(t *testing.T) {
 		_ = meterProvider.Shutdown(context.Background())
 	}()
 
-	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 5*time.Second, 10*time.Second)
+	poller, err := NewPoller(queue, fetcher, logger, meterProvider.Meter("test"), time.Second, 0, 5*time.Second, 10*time.Second)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}

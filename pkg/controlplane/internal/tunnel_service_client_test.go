@@ -99,6 +99,7 @@ func TestTunnelServiceClientPollSuccess(t *testing.T) {
 		wantPath := "/v1/tunnel/" + url.PathEscape(tunnelID) + "/poll"
 		assert.Equal(t, wantPath, r.URL.Path, "unexpected path")
 		assert.Equal(t, strconv.Itoa(limit), r.URL.Query().Get("limit"), "unexpected limit")
+		assert.Equal(t, "1000", r.URL.Query().Get("timeout_ms"), "unexpected timeout_ms")
 		assert.Equal(t, "Bearer "+apiKey, r.Header.Get("Authorization"), "unexpected Authorization header")
 		assert.Empty(t, r.Header.Get("X-Tunnel-ID"), "X-Tunnel-ID header should be omitted")
 		assert.Equal(t, "application/json", r.Header.Get("Accept"), "unexpected Accept header")
@@ -269,6 +270,47 @@ func TestTunnelServiceClientPollWithNonPositiveLimit(t *testing.T) {
 	cmds, _, pollErr := client.Poll(context.Background(), 0)
 	assert.NoError(t, pollErr, "Poll should not error")
 	assert.Nil(t, cmds, "expected nil result for non-positive limit")
+}
+
+func TestNewTunnelServiceClientUsesConfiguredPollDeadlineGuardrail(t *testing.T) {
+	t.Parallel()
+
+	const (
+		pollTimeout   = 500 * time.Millisecond
+		pollGuardrail = 500 * time.Millisecond
+	)
+
+	client, err := NewTunnelServiceClient(context.Background(), &config.ControlPlaneConfig{
+		BaseURL:               mustParseURL(t, "https://example.com"),
+		TunnelID:              types.TunnelID("cli-tunnel"),
+		APIKey:                "test-api-key",
+		PollTimeout:           pollTimeout,
+		PollDeadlineGuardrail: pollGuardrail,
+	}, nil, newDiscardLogger(), &config.LoggingConfig{}, testMeterProvider)
+	require.NoError(t, err)
+
+	require.Equal(t, pollTimeout, client.pollTimeout)
+	require.Equal(t, pollGuardrail, client.pollGuardrail)
+	require.Equal(t, pollTimeout+pollGuardrail, client.client.Timeout)
+}
+
+func TestPollDeadlineTimeoutUsesRequestedPollTimeout(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		1*time.Second,
+		(config.ControlPlaneConfig{
+			PollTimeout:           500 * time.Millisecond,
+			PollDeadlineGuardrail: 500 * time.Millisecond,
+		}).PollDeadlineTimeoutOrDefault(),
+	)
+}
+
+func TestPollTimeoutMillisecondsRoundsPositiveSubMillisecondDurationUp(t *testing.T) {
+	t.Parallel()
+
+	require.EqualValues(t, 1, pollTimeoutMilliseconds(time.Nanosecond))
 }
 
 func TestTunnelServiceClientPollSurfacesAPIErrorCode(t *testing.T) {

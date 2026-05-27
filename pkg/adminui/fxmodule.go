@@ -66,23 +66,24 @@ type routeParams struct {
 }
 
 type statusResponse struct {
-	Version                 string                       `json:"version"`
-	StartedAt               time.Time                    `json:"started_at"`
-	UptimeSeconds           int64                        `json:"uptime_seconds"`
-	HealthListenAddr        string                       `json:"health_listen_addr,omitempty"`
-	ControlPlaneBaseURL     string                       `json:"control_plane_base_url,omitempty"`
-	ControlPlaneTunnelID    string                       `json:"control_plane_tunnel_id,omitempty"`
-	ControlPlaneMaxInflight int                          `json:"control_plane_max_inflight,omitempty"`
-	ControlPlanePollTimeout string                       `json:"control_plane_poll_timeout,omitempty"`
-	MCPServerURL            string                       `json:"mcp_server_url,omitempty"`
-	MCPResourceMetadataURLs []string                     `json:"mcp_resource_metadata_urls,omitempty"`
-	Channels                []ChannelStatus              `json:"channels,omitempty"`
-	ControlPlaneRoute       *proxy.RouteSummary          `json:"control_plane_route,omitempty"`
-	MCPRoutes               []proxy.RouteSummary         `json:"mcp_routes,omitempty"`
-	RawHTTPLoggingEnabled   bool                         `json:"raw_http_logging_enabled"`
-	TunnelMetadata          *controlplane.TunnelMetadata `json:"tunnel_metadata,omitempty"`
-	MetadataError           string                       `json:"tunnel_metadata_error,omitempty"`
-	Warnings                []string                     `json:"warnings,omitempty"`
+	Version                           string                       `json:"version"`
+	StartedAt                         time.Time                    `json:"started_at"`
+	UptimeSeconds                     int64                        `json:"uptime_seconds"`
+	HealthListenAddr                  string                       `json:"health_listen_addr,omitempty"`
+	ControlPlaneBaseURL               string                       `json:"control_plane_base_url,omitempty"`
+	ControlPlaneTunnelID              string                       `json:"control_plane_tunnel_id,omitempty"`
+	ControlPlaneMaxInflight           int                          `json:"control_plane_max_inflight,omitempty"`
+	ControlPlanePollTimeout           string                       `json:"control_plane_poll_timeout,omitempty"`
+	ControlPlanePollDeadlineGuardrail string                       `json:"control_plane_poll_deadline_guardrail,omitempty"`
+	MCPServerURL                      string                       `json:"mcp_server_url,omitempty"`
+	MCPResourceMetadataURLs           []string                     `json:"mcp_resource_metadata_urls,omitempty"`
+	Channels                          []ChannelStatus              `json:"channels,omitempty"`
+	ControlPlaneRoute                 *proxy.RouteSummary          `json:"control_plane_route,omitempty"`
+	MCPRoutes                         []proxy.RouteSummary         `json:"mcp_routes,omitempty"`
+	RawHTTPLoggingEnabled             bool                         `json:"raw_http_logging_enabled"`
+	TunnelMetadata                    *controlplane.TunnelMetadata `json:"tunnel_metadata,omitempty"`
+	MetadataError                     string                       `json:"tunnel_metadata_error,omitempty"`
+	Warnings                          []string                     `json:"warnings,omitempty"`
 }
 
 func registerRoutes(p routeParams) error {
@@ -195,6 +196,9 @@ func buildStatus(p routeParams) statusResponse {
 		out.ControlPlaneMaxInflight = p.ControlPlane.MaxInFlightRequests
 		if p.ControlPlane.PollTimeout > 0 {
 			out.ControlPlanePollTimeout = p.ControlPlane.PollTimeout.String()
+		}
+		if p.ControlPlane.PollDeadlineGuardrail > 0 {
+			out.ControlPlanePollDeadlineGuardrail = p.ControlPlane.PollDeadlineGuardrail.String()
 		}
 	}
 	if p.MCPConfig != nil {

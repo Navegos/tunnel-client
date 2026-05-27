@@ -46,24 +46,25 @@ func TestResolveControlPlanePathUsesSingleSeparator(t *testing.T) {
 
 func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	lookup := map[string]string{
-		"CONTROL_PLANE_BASE_URL":              "https://example",
-		"CONTROL_PLANE_URL_PATH":              "/gateway/dev/us",
-		"CONTROL_PLANE_TUNNEL_ID":             envTunnelID,
-		"CONTROL_PLANE_API_KEY":               "control-key",
-		"CONTROL_PLANE_MAX_INFLIGHT_REQUESTS": "15",
-		"CONTROL_PLANE_POLL_TIMEOUT":          "45s",
-		"LOG_LEVEL":                           "debug",
-		"LOG_FORMAT":                          "json",
-		"LOG_FILE":                            "/tmp/log",
-		"LOG_HTTP_RAW_UNSAFE":                 "true",
-		"HEALTH_URL_FILE":                     "/tmp/health-url",
-		"ADMIN_UI_LOG_BUFFER_EVENTS":          "1234",
-		"PID_FILE":                            "/tmp/pid-file",
-		"MCP_SERVER_URL":                      "https://mcp.example",
-		"MCP_EXTRA_HEADERS":                   "X-Internal-Auth: env-static",
-		"MCP_DISCOVERY_EXTRA_HEADERS":         "X-Discovery-Auth: env-discovery",
-		"MCP_CONNECTION_MAX_TTL":              "30s",
-		"MCP_MAX_CONCURRENT_REQUESTS":         "12",
+		"CONTROL_PLANE_BASE_URL":                "https://example",
+		"CONTROL_PLANE_URL_PATH":                "/gateway/dev/us",
+		"CONTROL_PLANE_TUNNEL_ID":               envTunnelID,
+		"CONTROL_PLANE_API_KEY":                 "control-key",
+		"CONTROL_PLANE_MAX_INFLIGHT_REQUESTS":   "15",
+		"CONTROL_PLANE_POLL_TIMEOUT":            "45s",
+		"CONTROL_PLANE_POLL_DEADLINE_GUARDRAIL": "500ms",
+		"LOG_LEVEL":                             "debug",
+		"LOG_FORMAT":                            "json",
+		"LOG_FILE":                              "/tmp/log",
+		"LOG_HTTP_RAW_UNSAFE":                   "true",
+		"HEALTH_URL_FILE":                       "/tmp/health-url",
+		"ADMIN_UI_LOG_BUFFER_EVENTS":            "1234",
+		"PID_FILE":                              "/tmp/pid-file",
+		"MCP_SERVER_URL":                        "https://mcp.example",
+		"MCP_EXTRA_HEADERS":                     "X-Internal-Auth: env-static",
+		"MCP_DISCOVERY_EXTRA_HEADERS":           "X-Discovery-Auth: env-discovery",
+		"MCP_CONNECTION_MAX_TTL":                "30s",
+		"MCP_MAX_CONCURRENT_REQUESTS":           "12",
 	}
 
 	cfg, err := Load(nil, func(key string) (string, bool) {
@@ -88,6 +89,9 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	}
 	if cfg.ControlPlane.PollTimeout != 45*time.Second {
 		t.Fatalf("unexpected poll timeout: %s", cfg.ControlPlane.PollTimeout)
+	}
+	if cfg.ControlPlane.PollDeadlineGuardrail != 500*time.Millisecond {
+		t.Fatalf("unexpected poll deadline guardrail: %s", cfg.ControlPlane.PollDeadlineGuardrail)
 	}
 	if cfg.Logging.Level != slog.LevelDebug {
 		t.Fatalf("unexpected log level: %s", cfg.Logging.Level.String())
@@ -133,6 +137,68 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	}
 }
 
+func TestControlPlanePollDefaultsStayBounded(t *testing.T) {
+	t.Parallel()
+
+	if defaultControlPlanePollTimeout <= 0 {
+		t.Fatalf("default poll timeout must be greater than zero: %s", defaultControlPlanePollTimeout)
+	}
+	if defaultControlPlanePollTimeout+defaultControlPlanePollDeadlineGuardrail > maxControlPlanePollDeadline {
+		t.Fatalf("default poll deadline must not exceed %s: %s", maxControlPlanePollDeadline, defaultControlPlanePollTimeout+defaultControlPlanePollDeadlineGuardrail)
+	}
+	if defaultControlPlanePollDeadlineGuardrail <= 0 {
+		t.Fatalf("default poll deadline guardrail must be greater than zero: %s", defaultControlPlanePollDeadlineGuardrail)
+	}
+	if defaultControlPlanePollDeadlineGuardrail >= maxControlPlanePollDeadlineGuardrail {
+		t.Fatalf("default poll deadline guardrail must stay below %s: %s", maxControlPlanePollDeadlineGuardrail, defaultControlPlanePollDeadlineGuardrail)
+	}
+}
+
+func TestLoadRejectsPollTimingAboveExplicitBounds(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "poll timeout",
+			args:    []string{"--control-plane.poll-timeout=10m1ms"},
+			wantErr: "control-plane.poll-timeout plus control-plane.poll-deadline-guardrail must be less than or equal to 10m0s",
+		},
+		{
+			name:    "poll deadline guardrail",
+			args:    []string{"--control-plane.poll-deadline-guardrail=1m"},
+			wantErr: "control-plane.poll-deadline-guardrail must be less than 1m0s",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(tc.args, lookupEnvMap(map[string]string{
+				"CONTROL_PLANE_TUNNEL_ID": envTunnelID,
+				"CONTROL_PLANE_API_KEY":   "control-key",
+			}))
+			if err == nil {
+				t.Fatal("expected Load to reject invalid poll timing")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestControlPlanePollDeadlineCapsAtExplicitDeadline(t *testing.T) {
+	t.Parallel()
+
+	if got := (ControlPlaneConfig{
+		PollTimeout:           maxControlPlanePollDeadline,
+		PollDeadlineGuardrail: time.Second,
+	}).PollDeadlineTimeoutOrDefault(); got != maxControlPlanePollDeadline {
+		t.Fatalf("expected poll deadline cap %s, got %s", maxControlPlanePollDeadline, got)
+	}
+}
+
 func TestLoadFlagsOverrideEnv(t *testing.T) {
 	lookup := map[string]string{
 		"CONTROL_PLANE_BASE_URL":              "https://env",
@@ -171,6 +237,7 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 		"--mcp.extra-headers", "X-Internal-Auth: flag-static",
 		"--mcp.discovery-extra-headers", "X-Discovery-Auth: flag-discovery",
 		"--control-plane.poll-timeout=5s",
+		"--control-plane.poll-deadline-guardrail=250ms",
 		"--mcp.connection-max-ttl=15m",
 		"--mcp.max-concurrent-requests=20",
 	}
@@ -230,6 +297,9 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 	if cfg.ControlPlane.PollTimeout != 5*time.Second {
 		t.Fatalf("expected poll timeout 5s, got %s", cfg.ControlPlane.PollTimeout)
 	}
+	if cfg.ControlPlane.PollDeadlineGuardrail != 250*time.Millisecond {
+		t.Fatalf("expected poll deadline guardrail 250ms, got %s", cfg.ControlPlane.PollDeadlineGuardrail)
+	}
 	if cfg.MCP.ConnectionMaxTTL != 15*time.Minute {
 		t.Fatalf("expected connection ttl 15m, got %s", cfg.MCP.ConnectionMaxTTL)
 	}
@@ -253,6 +323,7 @@ control_plane:
   api_key: env:YAML_CONTROL_PLANE_API_KEY
   max_inflight_requests: 17
   poll_timeout: 55s
+  poll_deadline_guardrail: 125ms
   extra_headers:
     X-Debug-Mode: yaml
     X-Control-Auth: file:`+controlHeaderPath+`
@@ -329,6 +400,9 @@ proxy:
 	}
 	if cfg.ControlPlane.PollTimeout != 55*time.Second {
 		t.Fatalf("unexpected poll timeout: %s", cfg.ControlPlane.PollTimeout)
+	}
+	if cfg.ControlPlane.PollDeadlineGuardrail != 125*time.Millisecond {
+		t.Fatalf("unexpected poll deadline guardrail: %s", cfg.ControlPlane.PollDeadlineGuardrail)
 	}
 	if cfg.ControlPlane.ExtraHeaders["X-Debug-Mode"] != "yaml" {
 		t.Fatalf("unexpected extra headers: %#v", cfg.ControlPlane.ExtraHeaders)

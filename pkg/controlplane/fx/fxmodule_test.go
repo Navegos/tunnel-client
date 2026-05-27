@@ -30,7 +30,7 @@ func TestRunPollerStartsEvenWhenFetcherBlocks(t *testing.T) {
 		_ = meterProvider.Shutdown(context.Background())
 	})
 
-	poller, err := internal.NewPoller(queueAdapter, fetcher, logger, meterProvider.Meter("test"), time.Millisecond*50, 0, 0)
+	poller, err := internal.NewPoller(queueAdapter, fetcher, logger, meterProvider.Meter("test"), time.Millisecond*50, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("new poller: %v", err)
 	}

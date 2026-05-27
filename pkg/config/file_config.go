@@ -37,16 +37,17 @@ type fileConfig struct {
 }
 
 type fileControlPlaneConfig struct {
-	BaseURL             *string           `yaml:"base_url"`
-	URLPath             *string           `yaml:"url_path"`
-	TunnelID            *string           `yaml:"tunnel_id"`
-	APIKey              *string           `yaml:"api_key"`
-	ClientCert          *string           `yaml:"client_cert"`
-	ClientKey           *string           `yaml:"client_key"`
-	HTTPProxy           *string           `yaml:"http_proxy"`
-	MaxInFlightRequests *int              `yaml:"max_inflight_requests"`
-	PollTimeout         *string           `yaml:"poll_timeout"`
-	ExtraHeaders        map[string]string `yaml:"extra_headers"`
+	BaseURL               *string           `yaml:"base_url"`
+	URLPath               *string           `yaml:"url_path"`
+	TunnelID              *string           `yaml:"tunnel_id"`
+	APIKey                *string           `yaml:"api_key"`
+	ClientCert            *string           `yaml:"client_cert"`
+	ClientKey             *string           `yaml:"client_key"`
+	HTTPProxy             *string           `yaml:"http_proxy"`
+	MaxInFlightRequests   *int              `yaml:"max_inflight_requests"`
+	PollTimeout           *string           `yaml:"poll_timeout"`
+	PollDeadlineGuardrail *string           `yaml:"poll_deadline_guardrail"`
+	ExtraHeaders          map[string]string `yaml:"extra_headers"`
 }
 
 type fileLogConfig struct {
@@ -198,6 +199,7 @@ func (c fileConfig) toEnv(lookupEnv func(string) (string, bool)) (map[string]str
 	setString(env, "CONTROL_PLANE_HTTP_PROXY", c.ControlPlane.HTTPProxy)
 	setInt(env, "CONTROL_PLANE_MAX_INFLIGHT_REQUESTS", c.ControlPlane.MaxInFlightRequests)
 	setString(env, "CONTROL_PLANE_POLL_TIMEOUT", c.ControlPlane.PollTimeout)
+	setString(env, "CONTROL_PLANE_POLL_DEADLINE_GUARDRAIL", c.ControlPlane.PollDeadlineGuardrail)
 	if c.ControlPlane.APIKey != nil {
 		apiKey, err := resolveConfigSecretReference("control_plane.api_key", *c.ControlPlane.APIKey, lookupEnv)
 		if err != nil {

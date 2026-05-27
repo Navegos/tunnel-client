@@ -46,24 +46,31 @@ const (
 )
 
 const (
-	defaultControlPlaneBaseURL                = "https://api.openai.com"
-	defaultControlPlaneMTLSBaseURL            = "https://mtls.api.openai.com"
-	defaultControlPlaneMaxInFlight            = 20
-	maxControlPlaneMaxInFlight                = 10000
-	defaultControlPlanePollTimeout            = 30 * time.Second
-	defaultProxyCheckInterval                 = 60 * time.Second
-	defaultLogLevel                           = "info"
-	defaultLogFormat                LogFormat = LogFormatUnset
-	defaultHealthListenAddr                   = "127.0.0.1:8080"
-	defaultAdminUILogBufferEvents             = 2000
-	maxAdminUILogBufferEvents                 = 100000
-	defaultMCPConnectionMaxTTL                = 10 * time.Minute
-	defaultMCPMaxConcurrentRequests           = 10
-	DefaultHarpoonMaxResponseBytes            = 100 * 1024
-	DefaultHarpoonMaxRedirects                = 5
+	defaultControlPlaneBaseURL                         = "https://api.openai.com"
+	defaultControlPlaneMTLSBaseURL                     = "https://mtls.api.openai.com"
+	defaultControlPlaneMaxInFlight                     = 20
+	maxControlPlaneMaxInFlight                         = 10000
+	defaultControlPlanePollTimeout                     = 30 * time.Second
+	defaultControlPlanePollDeadlineGuardrail           = 5000 * time.Millisecond
+	maxControlPlanePollDeadlineGuardrail               = time.Minute
+	maxControlPlanePollDeadline                        = 10 * time.Minute
+	defaultProxyCheckInterval                          = 60 * time.Second
+	defaultLogLevel                                    = "info"
+	defaultLogFormat                         LogFormat = LogFormatUnset
+	defaultHealthListenAddr                            = "127.0.0.1:8080"
+	defaultAdminUILogBufferEvents                      = 2000
+	maxAdminUILogBufferEvents                          = 100000
+	defaultMCPConnectionMaxTTL                         = 10 * time.Minute
+	defaultMCPMaxConcurrentRequests                    = 10
+	DefaultHarpoonMaxResponseBytes                     = 100 * 1024
+	DefaultHarpoonMaxRedirects                         = 5
 )
 
 const _ = uint(maxControlPlaneMaxInFlight - defaultControlPlaneMaxInFlight)
+const _ = uint(defaultControlPlanePollTimeout - 1)
+const _ = uint(maxControlPlanePollDeadline - defaultControlPlanePollTimeout - defaultControlPlanePollDeadlineGuardrail)
+const _ = uint(defaultControlPlanePollDeadlineGuardrail - 1)
+const _ = uint(maxControlPlanePollDeadlineGuardrail - defaultControlPlanePollDeadlineGuardrail - 1)
 
 var harpoonLabelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
@@ -139,12 +146,13 @@ type AdminUIConfig struct {
 
 // ControlPlaneConfig defines how the client reaches the tunnel control plane.
 type ControlPlaneConfig struct {
-	BaseURL             *url.URL
-	URLPath             string
-	TunnelID            types.TunnelID
-	APIKey              string
-	MaxInFlightRequests int
-	PollTimeout         time.Duration
+	BaseURL               *url.URL
+	URLPath               string
+	TunnelID              types.TunnelID
+	APIKey                string
+	MaxInFlightRequests   int
+	PollTimeout           time.Duration
+	PollDeadlineGuardrail time.Duration
 	// PollBackoffMin/PollBackoffMax allow overriding the poller's retry window.
 	// Zero values fall back to the internal defaults.
 	PollBackoffMin    time.Duration
@@ -194,6 +202,32 @@ type MCPConfig struct {
 	DiscoveryExtraHeaders map[string]string
 	HTTPProxy             *url.URL
 	HTTPProxySource       ProxySource
+}
+
+// PollTimeoutOrDefault returns the configured requested service wait or its runtime default.
+func (c ControlPlaneConfig) PollTimeoutOrDefault() time.Duration {
+	if c.PollTimeout <= 0 {
+		return defaultControlPlanePollTimeout
+	}
+	return c.PollTimeout
+}
+
+// PollDeadlineGuardrailOrDefault returns the configured client deadline guardrail or its runtime default.
+func (c ControlPlaneConfig) PollDeadlineGuardrailOrDefault() time.Duration {
+	if c.PollDeadlineGuardrail <= 0 {
+		return defaultControlPlanePollDeadlineGuardrail
+	}
+	return c.PollDeadlineGuardrail
+}
+
+// PollDeadlineTimeoutOrDefault returns the client HTTP/context deadline for one poll cycle.
+func (c ControlPlaneConfig) PollDeadlineTimeoutOrDefault() time.Duration {
+	pollTimeout := c.PollTimeoutOrDefault()
+	pollDeadlineGuardrail := c.PollDeadlineGuardrailOrDefault()
+	if pollDeadlineGuardrail >= maxControlPlanePollDeadline || pollTimeout > maxControlPlanePollDeadline-pollDeadlineGuardrail {
+		return maxControlPlanePollDeadline
+	}
+	return pollTimeout + pollDeadlineGuardrail
 }
 
 // MCPChannelBinding maps one tunnel-service channel to one MCP transport.
@@ -363,6 +397,7 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("control-plane.http-proxy", "", "Outbound HTTP proxy for the control plane (format <url|env:VAR>)")
 	fs.Int("control-plane.max-inflight", defaultControlPlaneMaxInFlight, "Maximum number of in-flight MCP requests before applying backpressure (env.CONTROL_PLANE_MAX_INFLIGHT_REQUESTS, max 10000)")
 	fs.Duration("control-plane.poll-timeout", defaultControlPlanePollTimeout, "Long-poll timeout when fetching commands from the control plane (env.CONTROL_PLANE_POLL_TIMEOUT)")
+	fs.Duration("control-plane.poll-deadline-guardrail", defaultControlPlanePollDeadlineGuardrail, "Extra time after the requested long-poll wait before the control-plane HTTP/context deadline (env.CONTROL_PLANE_POLL_DEADLINE_GUARDRAIL)")
 	fs.StringArray("control-plane.extra-headers", nil, "Additional HTTP headers to send to the tunnel control-plane (format 'Key: Value', repeatable; values accept env:VAR or file:/path) (env.CONTROL_PLANE_EXTRA_HEADERS)")
 	fs.String("log.level", defaultLogLevel, "Log level (debug, info, warn) (env.LOG_LEVEL)")
 	fs.String("log.format", defaultLogFormat.String(), "Log format (struct-text, json) (env.LOG_FORMAT)")
@@ -825,6 +860,30 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 		pollTimeout = val
 	}
 
+	pollDeadlineGuardrail := defaultControlPlanePollDeadlineGuardrail
+	if flag := fs.Lookup("control-plane.poll-deadline-guardrail"); flag != nil && flag.Changed {
+		val, err := fs.GetDuration("control-plane.poll-deadline-guardrail")
+		if err != nil {
+			return ControlPlaneConfig{}, fmt.Errorf("invalid value for --control-plane.poll-deadline-guardrail: %w", err)
+		}
+		if val <= 0 {
+			return ControlPlaneConfig{}, errors.New("control-plane.poll-deadline-guardrail must be greater than zero")
+		}
+		pollDeadlineGuardrail = val
+	} else if envVal, ok := lookupEnv("CONTROL_PLANE_POLL_DEADLINE_GUARDRAIL"); ok && envVal != "" {
+		val, err := time.ParseDuration(envVal)
+		if err != nil {
+			return ControlPlaneConfig{}, fmt.Errorf("invalid CONTROL_PLANE_POLL_DEADLINE_GUARDRAIL: %w", err)
+		}
+		if val <= 0 {
+			return ControlPlaneConfig{}, errors.New("CONTROL_PLANE_POLL_DEADLINE_GUARDRAIL must be greater than zero")
+		}
+		pollDeadlineGuardrail = val
+	}
+	if err := validateControlPlanePollTiming(pollTimeout, pollDeadlineGuardrail); err != nil {
+		return ControlPlaneConfig{}, err
+	}
+
 	var apiKeyFlagValue string
 	if flag := fs.Lookup("control-plane.api-key"); flag != nil && flag.Changed {
 		apiKeyFlagValue = flag.Value.String()
@@ -846,17 +905,28 @@ func buildControlPlaneConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, 
 	}
 
 	return ControlPlaneConfig{
-		BaseURL:             baseURL,
-		URLPath:             controlPlaneURLPath,
-		TunnelID:            types.TunnelID(tunnelID),
-		APIKey:              apiKey,
-		MaxInFlightRequests: maxInFlight,
-		PollTimeout:         pollTimeout,
-		ClientCertificate:   clientCertificate,
-		ExtraHeaders:        extraHeaders,
-		HTTPProxy:           httpProxy,
-		HTTPProxySource:     httpProxySource,
+		BaseURL:               baseURL,
+		URLPath:               controlPlaneURLPath,
+		TunnelID:              types.TunnelID(tunnelID),
+		APIKey:                apiKey,
+		MaxInFlightRequests:   maxInFlight,
+		PollTimeout:           pollTimeout,
+		PollDeadlineGuardrail: pollDeadlineGuardrail,
+		ClientCertificate:     clientCertificate,
+		ExtraHeaders:          extraHeaders,
+		HTTPProxy:             httpProxy,
+		HTTPProxySource:       httpProxySource,
 	}, nil
+}
+
+func validateControlPlanePollTiming(pollTimeout, pollDeadlineGuardrail time.Duration) error {
+	if pollDeadlineGuardrail >= maxControlPlanePollDeadlineGuardrail {
+		return fmt.Errorf("control-plane.poll-deadline-guardrail must be less than %s", maxControlPlanePollDeadlineGuardrail)
+	}
+	if pollTimeout > maxControlPlanePollDeadline-pollDeadlineGuardrail {
+		return fmt.Errorf("control-plane.poll-timeout plus control-plane.poll-deadline-guardrail must be less than or equal to %s", maxControlPlanePollDeadline)
+	}
+	return nil
 }
 
 func controlPlaneBaseURLRaw(fs *pflag.FlagSet, lookupEnv func(string) (string, bool), clientCertificate *tlsconfig.ClientCertificate) string {

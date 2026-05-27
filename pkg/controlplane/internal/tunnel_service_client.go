@@ -30,7 +30,6 @@ import (
 )
 
 const (
-	defaultPollTimeout           = 30 * time.Second
 	pollPathFormat               = "/v1/tunnel/%s/poll"
 	responsePathFormat           = "/v1/tunnel/%s/response"
 	metadataPathFormat           = "/v1/tunnels/%s"
@@ -50,6 +49,8 @@ type TunnelServiceClient struct {
 	tunnelID         types.TunnelID
 	apiKey           string
 	userAgent        string
+	pollTimeout      time.Duration
+	pollGuardrail    time.Duration
 }
 
 // NewTunnelServiceClient constructs an HTTP-backed client using the provided config.
@@ -79,10 +80,9 @@ func NewTunnelServiceClient(ctx context.Context, cfg *config.ControlPlaneConfig,
 	responseEndpoint := config.ResolveControlPlanePath(cfg.BaseURL, cfg.URLPath, fmt.Sprintf(responsePathFormat, tunnelIDSegment))
 	metadataEndpoint := config.ResolveControlPlanePath(cfg.BaseURL, cfg.URLPath, fmt.Sprintf(metadataPathFormat, tunnelIDSegment))
 
-	timeout := cfg.PollTimeout
-	if timeout <= 0 {
-		timeout = defaultPollTimeout
-	}
+	pollTimeout := cfg.PollTimeoutOrDefault()
+	pollGuardrail := cfg.PollDeadlineGuardrailOrDefault()
+	pollDeadline := cfg.PollDeadlineTimeoutOrDefault()
 
 	transport, err := buildControlPlaneHTTPTransport(cfg, tlsBundle, logger, loggingCfg, meterProvider)
 	if err != nil {
@@ -92,7 +92,7 @@ func NewTunnelServiceClient(ctx context.Context, cfg *config.ControlPlaneConfig,
 
 	client := &TunnelServiceClient{
 		client: &http.Client{
-			Timeout:   timeout,
+			Timeout:   pollDeadline,
 			Transport: transport,
 		},
 		pollEndpoint:     pollEndpoint,
@@ -102,13 +102,17 @@ func NewTunnelServiceClient(ctx context.Context, cfg *config.ControlPlaneConfig,
 		tunnelID:         cfg.TunnelID,
 		apiKey:           cfg.APIKey,
 		userAgent:        version.UserAgent,
+		pollTimeout:      pollTimeout,
+		pollGuardrail:    pollGuardrail,
 	}
 	logger.InfoContext(ctx, "TunnelServiceClient created",
 		slog.String("tunnel_id", client.tunnelID.String()),
 		slog.String("poll_endpoint", client.pollEndpoint.String()),
 		slog.String("response_endpoint", client.responseEndpoint.String()),
 		slog.String("metadata_endpoint", client.metadataEndpoint.String()),
-		slog.Int64("timeout_ms", timeout.Milliseconds()),
+		slog.Int64("poll_timeout_ms", pollTimeoutMilliseconds(pollTimeout)),
+		slog.Int64("poll_deadline_guardrail_ms", pollGuardrail.Milliseconds()),
+		slog.Int64("poll_deadline_ms", pollDeadline.Milliseconds()),
 	)
 
 	return client, nil
@@ -416,6 +420,7 @@ func (c *TunnelServiceClient) Poll(ctx context.Context, limit int) ([]controlpla
 
 	query := req.URL.Query()
 	query.Set("limit", strconv.Itoa(limit))
+	query.Set("timeout_ms", strconv.FormatInt(pollTimeoutMilliseconds(c.pollTimeout), 10))
 	req.URL.RawQuery = query.Encode()
 
 	resp, err := c.client.Do(req)
@@ -441,6 +446,14 @@ func (c *TunnelServiceClient) Poll(ctx context.Context, limit int) ([]controlpla
 	default:
 		return nil, tunnelServiceRequestID, newAPIStatusError("controlplane client: unexpected status", resp)
 	}
+}
+
+func pollTimeoutMilliseconds(timeout time.Duration) int64 {
+	timeoutMS := (config.ControlPlaneConfig{PollTimeout: timeout}).PollTimeoutOrDefault().Milliseconds()
+	if timeoutMS > 0 {
+		return timeoutMS
+	}
+	return 1
 }
 
 func (c *TunnelServiceClient) decodeCommands(ctx context.Context, r io.Reader, limit int) ([]controlplane.PolledCommand, error) {

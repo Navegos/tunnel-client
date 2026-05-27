@@ -114,7 +114,8 @@ control_plane:
   client_cert: file:/run/secrets/control-plane-client.crt
   client_key: file:/run/secrets/control-plane-client.key
   max_inflight_requests: 20
-  poll_timeout: 30s
+  poll_timeout: 30000ms
+  poll_deadline_guardrail: 5000ms
   extra_headers:
     X-Debug-Mode: "1"
     X-Internal-Auth: env:CONTROL_PLANE_HEADER_VALUE
@@ -283,7 +284,19 @@ tunnel-client profiles add corp-proxy --sample sample_mcp_enterprise_proxy --tun
 - **Poll timeout**
   - Flag: `--control-plane.poll-timeout`
   - Env: `CONTROL_PLANE_POLL_TIMEOUT`
-  - Default: `30s`
+  - Default: `30000ms`
+  - Behavior: tunnel-client sends this as the requested `/poll?timeout_ms=...`
+    empty-poll wait budget. Together with `poll_deadline_guardrail`, the client
+    poll HTTP/context deadline must stay at or below `600000ms`.
+- **Poll deadline guardrail**
+  - Flag: `--control-plane.poll-deadline-guardrail`
+  - Env: `CONTROL_PLANE_POLL_DEADLINE_GUARDRAIL`
+  - Default: `5000ms`
+  - Max: less than `60000ms`
+  - Behavior: tunnel-client adds this after the requested service wait when
+    setting the HTTP/context deadline so a normal `204 No Content` empty poll
+    can complete without being classified as a client timeout. Test profiles
+    can override it with a smaller millisecond duration such as `500ms`.
 - **Max in-flight buffer**
   - Flag: `--control-plane.max-inflight`
   - Env: `CONTROL_PLANE_MAX_INFLIGHT_REQUESTS`
