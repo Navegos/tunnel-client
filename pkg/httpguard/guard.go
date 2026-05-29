@@ -8,6 +8,8 @@ import (
 
 const defaultLoopbackMessage = "access is restricted to loopback; set --allow-remote-ui to override"
 
+type connectionNetworkKey struct{}
+
 // GuardedMux wraps an http.ServeMux with loopback gating.
 type GuardedMux struct {
 	mux         *http.ServeMux
@@ -66,6 +68,9 @@ func IsLoopbackRequest(r *http.Request) bool {
 	if r == nil {
 		return false
 	}
+	if ConnectionNetwork(r.Context()) == "unix" {
+		return true
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return false
@@ -75,6 +80,18 @@ func IsLoopbackRequest(r *http.Request) bool {
 		return false
 	}
 	return ip.IsLoopback()
+}
+
+func WithConnectionNetwork(ctx context.Context, network string) context.Context {
+	return context.WithValue(ctx, connectionNetworkKey{}, network)
+}
+
+func ConnectionNetwork(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	network, _ := ctx.Value(connectionNetworkKey{}).(string)
+	return network
 }
 
 // WithShutdownContext merges the request context with a shutdown context.

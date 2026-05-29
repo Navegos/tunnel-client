@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/healthurl"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
 )
@@ -109,9 +112,47 @@ func TestBuildHealthURLWithWildcardListenAddr(t *testing.T) {
 func TestBuildHealthURLRejectsNonTCPAddr(t *testing.T) {
 	t.Parallel()
 
-	_, err := buildHealthURL(":0", fakeAddr{})
+	_, err := buildHealthURL(&config.HealthConfig{ListenAddr: ":0"}, fakeAddr{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expected *net.TCPAddr")
+}
+
+func TestBuildHealthURLWithUnixSocket(t *testing.T) {
+	t.Parallel()
+
+	socketPath := filepath.Join(t.TempDir(), "health.sock")
+	healthURL, err := buildHealthURL(&config.HealthConfig{UnixSocket: socketPath}, fakeAddr{})
+	require.NoError(t, err)
+	require.Equal(t, healthurl.BuildUnixBaseURL(socketPath), healthURL)
+}
+
+func TestListenHealthUnixSocketRejectsNonSocketPath(t *testing.T) {
+	t.Parallel()
+
+	socketPath := filepath.Join(t.TempDir(), "health.sock")
+	require.NoError(t, os.WriteFile(socketPath, []byte("not a socket"), 0o600))
+
+	_, err := listenHealth(&config.HealthConfig{UnixSocket: socketPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exists and is not a unix socket")
+
+	contents, readErr := os.ReadFile(socketPath)
+	require.NoError(t, readErr)
+	require.Equal(t, "not a socket", string(contents))
+}
+
+func TestListenHealthUnixSocketRemovesStaleSocket(t *testing.T) {
+	t.Parallel()
+
+	socketPath := shortSocketPath(t, "tunnel-client-health-stale-*.sock")
+	staleListener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	staleListener.(*net.UnixListener).SetUnlinkOnClose(false)
+	require.NoError(t, staleListener.Close())
+
+	listener, err := listenHealth(&config.HealthConfig{UnixSocket: socketPath})
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
 }
 
 func TestPreferredHealthHostUsesListenerIPWhenListenAddrHostUnspecified(t *testing.T) {
@@ -406,9 +447,22 @@ func (fakeAddr) String() string  { return "fake" }
 func mustBuildHealthURL(t *testing.T, listenAddr string, addr net.Addr) string {
 	t.Helper()
 
-	healthURL, err := buildHealthURL(listenAddr, addr)
+	healthURL, err := buildHealthURL(&config.HealthConfig{ListenAddr: listenAddr}, addr)
 	require.NoError(t, err)
 	return healthURL
+}
+
+func shortSocketPath(t *testing.T, pattern string) string {
+	t.Helper()
+
+	socketFile, err := os.CreateTemp("/tmp", pattern)
+	require.NoError(t, err)
+	require.NoError(t, socketFile.Close())
+	require.NoError(t, os.Remove(socketFile.Name()))
+	t.Cleanup(func() {
+		_ = os.Remove(socketFile.Name())
+	})
+	return socketFile.Name()
 }
 
 func listen(t *testing.T, network, address string) net.Listener {

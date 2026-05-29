@@ -8,12 +8,16 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/healthurl"
+	"go.openai.org/api/tunnel-client/pkg/httpguard"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/metrics"
@@ -47,10 +51,11 @@ type Service interface {
 }
 
 type healthService struct {
-	server  *http.Server
-	urlFile string
-	boundCh chan struct{}
-	boundMu sync.Once
+	server     *http.Server
+	urlFile    string
+	socketPath string
+	boundCh    chan struct{}
+	boundMu    sync.Once
 }
 
 func (s *healthService) Addr(timeout time.Duration) (string, error) {
@@ -140,6 +145,9 @@ func newHealthService(p healthParams) (*healthService, error) {
 		Handler:           p.AdminMux,
 		ReadHeaderTimeout: 5 * time.Second,
 		Addr:              p.HealthConfig.ListenAddr,
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			return httpguard.WithConnectionNetwork(ctx, conn.LocalAddr().Network())
+		},
 	}
 	service := &healthService{server: srv, boundCh: make(chan struct{})}
 
@@ -159,20 +167,30 @@ func newHealthService(p healthParams) (*healthService, error) {
 				return err
 			}
 
-			ln, err := net.Listen("tcp", srv.Addr)
+			ln, err := listenHealth(p.HealthConfig)
 			if err != nil {
 				return err
 			}
 			srv.Addr = ln.Addr().String()
+			if p.HealthConfig.UnixSocket != "" {
+				service.socketPath = p.HealthConfig.UnixSocket
+			}
 			service.markBound()
 			if p.HealthConfig.URLFile != "" {
-				healthURL, err := buildHealthURL(p.HealthConfig.ListenAddr, ln.Addr())
+				healthURL, err := buildHealthURL(p.HealthConfig, ln.Addr())
 				if err != nil {
 					_ = ln.Close()
+					_ = service.removeSocket()
 					return fmt.Errorf("determine health URL: %w", err)
+				}
+				if err := os.MkdirAll(filepath.Dir(p.HealthConfig.URLFile), 0o755); err != nil {
+					_ = ln.Close()
+					_ = service.removeSocket()
+					return fmt.Errorf("create health URL file dir %s: %w", filepath.Dir(p.HealthConfig.URLFile), err)
 				}
 				if err := os.WriteFile(p.HealthConfig.URLFile, []byte(healthURL), 0o644); err != nil {
 					_ = ln.Close()
+					_ = service.removeSocket()
 					return fmt.Errorf("write health URL file %s: %w", p.HealthConfig.URLFile, err)
 				}
 				service.urlFile = p.HealthConfig.URLFile
@@ -192,7 +210,7 @@ func newHealthService(p healthParams) (*healthService, error) {
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
-			return errors.Join(srv.Shutdown(ctx), service.removeURLFile())
+			return errors.Join(srv.Shutdown(ctx), service.removeURLFile(), service.removeSocket())
 		},
 	})
 	return service, nil
@@ -210,12 +228,75 @@ func (s *healthService) removeURLFile() error {
 	return nil
 }
 
-func buildHealthURL(listenAddr string, addr net.Addr) (string, error) {
+func (s *healthService) removeSocket() error {
+	if s.socketPath == "" {
+		return nil
+	}
+
+	if err := os.Remove(s.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove health unix socket %s: %w", s.socketPath, err)
+	}
+
+	return nil
+}
+
+func listenHealth(cfg *config.HealthConfig) (net.Listener, error) {
+	if cfg != nil && cfg.UnixSocket != "" {
+		if err := os.MkdirAll(filepath.Dir(cfg.UnixSocket), 0o755); err != nil {
+			return nil, fmt.Errorf("create health unix socket dir %s: %w", filepath.Dir(cfg.UnixSocket), err)
+		}
+		if err := removeStaleUnixSocket(cfg.UnixSocket); err != nil {
+			return nil, err
+		}
+		return net.Listen("unix", cfg.UnixSocket)
+	}
+	if cfg == nil {
+		return nil, fmt.Errorf("health: config is required")
+	}
+	return net.Listen("tcp", cfg.ListenAddr)
+}
+
+func removeStaleUnixSocket(socketPath string) error {
+	info, err := os.Lstat(socketPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat health unix socket %s: %w", socketPath, err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("health unix socket path %s exists and is not a unix socket", socketPath)
+	}
+
+	conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		return fmt.Errorf("health unix socket path %s is already accepting connections", socketPath)
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) && !errors.Is(err, syscall.ENOENT) {
+		return fmt.Errorf("probe health unix socket %s: %w", socketPath, err)
+	}
+
+	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale health unix socket %s: %w", socketPath, err)
+	}
+	return nil
+}
+
+func buildHealthURL(cfg *config.HealthConfig, addr net.Addr) (string, error) {
+	if cfg != nil && cfg.UnixSocket != "" {
+		return healthurl.BuildUnixBaseURL(cfg.UnixSocket), nil
+	}
+
 	tcpAddr, ok := addr.(*net.TCPAddr)
 	if !ok {
 		return "", fmt.Errorf("health listener address is %T, expected *net.TCPAddr", addr)
 	}
 
+	listenAddr := ""
+	if cfg != nil {
+		listenAddr = cfg.ListenAddr
+	}
 	host := preferredHealthHost(listenAddr, tcpAddr)
 
 	return "http://" + net.JoinHostPort(host, strconv.Itoa(tcpAddr.Port)), nil

@@ -245,6 +245,29 @@ func TestDoctorUsesEphemeralUIHintForPortZero(t *testing.T) {
 	require.Contains(t, stdout, "inspect startup summary or HEALTH_URL_FILE")
 }
 
+func TestDoctorUsesUnixSocketHealthListener(t *testing.T) {
+	t.Parallel()
+
+	socketPath := shortSocketPath(t, "tunnel-client-doctor-health-*.sock")
+
+	stdout, stderr, err := executeCommand(t, map[string]string{
+		"HOME":                  t.TempDir(),
+		"CONTROL_PLANE_API_KEY": "test-api-key",
+	}, "doctor",
+		"--control-plane.tunnel-id", "tunnel_0123456789abcdef0123456789abcdef",
+		"--mcp.command", testExecutableCommand(),
+		"--health.unix-socket", socketPath,
+	)
+
+	require.NoError(t, err, stderr)
+	require.Contains(t, stdout, "CHECK health_listener")
+	require.Contains(t, stdout, "will bind unix socket "+socketPath)
+	require.Contains(t, stdout, "CHECK ui")
+	require.Contains(t, stdout, "inspect startup summary or HEALTH_URL_FILE for the Unix-socket admin URL")
+	_, statErr := os.Stat(socketPath)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 func TestDoctorFailsWhenStdioExecutableMissing(t *testing.T) {
 	t.Parallel()
 

@@ -38,6 +38,12 @@ func TestIsLoopbackRequest(t *testing.T) {
 	if got := IsLoopbackRequest(nil); got {
 		t.Fatalf("IsLoopbackRequest(nil) = true, want false")
 	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.test", nil)
+	req = req.WithContext(WithConnectionNetwork(req.Context(), "unix"))
+	if got := IsLoopbackRequest(req); !got {
+		t.Fatalf("IsLoopbackRequest(unix) = false, want true")
+	}
 }
 
 func TestLocalOnly(t *testing.T) {

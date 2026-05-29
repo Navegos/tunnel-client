@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"go.openai.org/api/tunnel-client/pkg/codexplugin/session"
+	"go.openai.org/api/tunnel-client/pkg/healthurl"
 )
 
 type healthLocatorReport struct {
@@ -326,11 +327,19 @@ func printEndpointReport(w io.Writer, label string, endpoint session.EndpointPro
 }
 
 func probeControlPlanePoll(baseURL string) healthMetricProbe {
-	metricsURL := strings.TrimRight(baseURL, "/") + "/metrics"
+	target, err := healthurl.Parse(baseURL)
+	if err != nil {
+		return healthMetricProbe{Error: err.Error()}
+	}
+	metricsURL := target.URL("/metrics")
 	probe := healthMetricProbe{URL: metricsURL}
 
-	client := http.Client{Timeout: 2 * time.Second}
-	response, err := client.Get(metricsURL)
+	client, err := target.HTTPClient(2 * time.Second)
+	if err != nil {
+		probe.Error = err.Error()
+		return probe
+	}
+	response, err := client.Get(target.RequestURL("/metrics"))
 	if err != nil {
 		probe.Error = err.Error()
 		return probe

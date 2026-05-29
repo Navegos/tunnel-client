@@ -15,6 +15,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/codexplugin"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/health"
+	"go.openai.org/api/tunnel-client/pkg/healthurl"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/mcpclient"
 	"go.openai.org/api/tunnel-client/pkg/oauth"
@@ -82,7 +83,7 @@ func registerStartup(p startupParams) error {
 				}
 				boundAddr = addr
 			}
-			baseURL := buildAdminBaseURL(p.HealthConfig.ListenAddr, boundAddr)
+			baseURL := buildAdminBaseURL(p.HealthConfig, boundAddr)
 			if baseURL == "" {
 				healthAddr := ""
 				if p.HealthService != nil {
@@ -139,7 +140,11 @@ func registerStartup(p startupParams) error {
 	return nil
 }
 
-func buildAdminBaseURL(listenAddr string, boundAddr string) string {
+func buildAdminBaseURL(cfg *config.HealthConfig, boundAddr string) string {
+	if cfg != nil && cfg.UnixSocket != "" {
+		return healthurl.BuildUnixBaseURL(cfg.UnixSocket)
+	}
+
 	// boundAddr comes from net.Listener.Addr().String() (e.g. "127.0.0.1:8080" or "[::]:8080").
 	host, port, err := net.SplitHostPort(boundAddr)
 	if err != nil || port == "" {
@@ -147,8 +152,10 @@ func buildAdminBaseURL(listenAddr string, boundAddr string) string {
 	}
 
 	configuredHost := ""
-	if h, _, err := net.SplitHostPort(listenAddr); err == nil {
-		configuredHost = h
+	if cfg != nil {
+		if h, _, err := net.SplitHostPort(cfg.ListenAddr); err == nil {
+			configuredHost = h
+		}
 	}
 
 	chosenHost := configuredHost

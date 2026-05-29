@@ -59,6 +59,7 @@ type fileLogConfig struct {
 
 type fileHealthConfig struct {
 	ListenAddr *string `yaml:"listen_addr"`
+	UnixSocket *string `yaml:"unix_socket"`
 	URLFile    *string `yaml:"url_file"`
 }
 
@@ -218,6 +219,9 @@ func (c fileConfig) toEnv(lookupEnv func(string) (string, bool)) (map[string]str
 	setBool(env, "LOG_HTTP_RAW_UNSAFE", c.Log.HTTPRawUnsafe)
 
 	if err := setResolvedString(env, "HEALTH_LISTEN_ADDR", "health.listen_addr", c.Health.ListenAddr, lookupEnv); err != nil {
+		return nil, err
+	}
+	if err := setResolvedString(env, "HEALTH_UNIX_SOCKET", "health.unix_socket", c.Health.UnixSocket, lookupEnv); err != nil {
 		return nil, err
 	}
 	setString(env, "HEALTH_URL_FILE", c.Health.URLFile)

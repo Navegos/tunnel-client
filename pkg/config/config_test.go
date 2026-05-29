@@ -57,6 +57,7 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 		"LOG_FORMAT":                            "json",
 		"LOG_FILE":                              "/tmp/log",
 		"LOG_HTTP_RAW_UNSAFE":                   "true",
+		"HEALTH_UNIX_SOCKET":                    "/tmp/health.sock",
 		"HEALTH_URL_FILE":                       "/tmp/health-url",
 		"ADMIN_UI_LOG_BUFFER_EVENTS":            "1234",
 		"PID_FILE":                              "/tmp/pid-file",
@@ -110,6 +111,9 @@ func TestLoadUsesEnvWhenFlagsEmpty(t *testing.T) {
 	}
 	if cfg.Health.URLFile != "/tmp/health-url" {
 		t.Fatalf("unexpected health URL file: %s", cfg.Health.URLFile)
+	}
+	if cfg.Health.UnixSocket != "/tmp/health.sock" {
+		t.Fatalf("unexpected health unix socket: %s", cfg.Health.UnixSocket)
 	}
 	if cfg.Health.ListenAddr != "127.0.0.1:8080" {
 		t.Fatalf("expected default health listen addr 127.0.0.1:8080, got %s", cfg.Health.ListenAddr)
@@ -212,6 +216,7 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 		"LOG_FORMAT":                          "json",
 		"LOG_FILE":                            "/tmp/env",
 		"LOG_HTTP_RAW_UNSAFE":                 "true",
+		"HEALTH_UNIX_SOCKET":                  "/tmp/env-health.sock",
 		"HEALTH_URL_FILE":                     "/tmp/env-health",
 		"ADMIN_UI_LOG_BUFFER_EVENTS":          "111",
 		"PID_FILE":                            "/tmp/env-pid",
@@ -230,6 +235,7 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 		"--log.format", "struct-text",
 		"--log.file", "/tmp/flag",
 		"--log.http-raw-unsafe=false",
+		"--health.unix-socket", "/tmp/flag-health.sock",
 		"--health.url-file", "/tmp/flag-health",
 		"--admin-ui.log-buffer-events=456",
 		"--pid.file", "/tmp/flag-pid",
@@ -276,6 +282,9 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 	if cfg.Health.URLFile != "/tmp/flag-health" {
 		t.Fatalf("expected health URL file /tmp/flag-health, got %s", cfg.Health.URLFile)
 	}
+	if cfg.Health.UnixSocket != "/tmp/flag-health.sock" {
+		t.Fatalf("expected health unix socket /tmp/flag-health.sock, got %s", cfg.Health.UnixSocket)
+	}
 	if cfg.AdminUI.LogBufferEvents != 456 {
 		t.Fatalf("expected admin UI log buffer events 456, got %d", cfg.AdminUI.LogBufferEvents)
 	}
@@ -312,6 +321,7 @@ func TestLoadUsesYAMLConfigWhenFlagsAndEnvUnset(t *testing.T) {
 	controlHeaderPath := writeTempSecretFile(t, "yaml-control-header\n")
 	discoveryHeaderPath := writeTempSecretFile(t, "yaml-discovery-from-file\n")
 	healthListenAddrPath := writeTempSecretFile(t, "127.0.0.1:9090\n")
+	healthUnixSocketPath := writeTempSecretFile(t, "/tmp/yaml-health.sock\n")
 	toolsCommandPath := writeTempSecretFile(t, "python -m tools\n")
 	harpoonTargetPath := writeTempSecretFile(t, "https://auth.example\n")
 	configPath := writeTempConfigFile(t, `
@@ -334,6 +344,7 @@ log:
   http_raw_unsafe: true
 health:
   listen_addr: file:`+healthListenAddrPath+`
+  unix_socket: file:`+healthUnixSocketPath+`
   url_file: /tmp/yaml-health-url
 admin_ui:
   allow_remote: true
@@ -413,7 +424,7 @@ proxy:
 	if cfg.Logging.Level != slog.LevelWarn || cfg.Logging.Format != LogFormatJSON || cfg.Logging.File != "/tmp/yaml-log.ndjson" || !cfg.Logging.HTTPRawUnsafe {
 		t.Fatalf("unexpected logging config: %#v", cfg.Logging)
 	}
-	if cfg.Health.ListenAddr != "127.0.0.1:9090" || cfg.Health.URLFile != "/tmp/yaml-health-url" {
+	if cfg.Health.ListenAddr != "127.0.0.1:9090" || cfg.Health.UnixSocket != "/tmp/yaml-health.sock" || cfg.Health.URLFile != "/tmp/yaml-health-url" {
 		t.Fatalf("unexpected health config: %#v", cfg.Health)
 	}
 	if !cfg.AdminUI.AllowRemote || !cfg.AdminUI.OpenBrowser || cfg.AdminUI.LogBufferEvents != 321 {

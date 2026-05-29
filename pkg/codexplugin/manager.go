@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	pluginstate "go.openai.org/api/tunnel-client/pkg/codexplugin/state"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	adminapi "go.openai.org/api/tunnel-client/pkg/controlplane/admin"
+	"go.openai.org/api/tunnel-client/pkg/healthurl"
 )
 
 const (
@@ -1563,9 +1563,15 @@ func (m *Manager) findLiveAdminUI(root pluginstate.Root, tunnelID string, staleB
 }
 
 func fetchAdminJSON(baseURL string, path string) (map[string]any, error) {
-	url := strings.TrimRight(baseURL, "/") + path
-	client := &http.Client{Timeout: 500 * time.Millisecond}
-	resp, err := client.Get(url)
+	target, err := healthurl.Parse(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	client, err := target.HTTPClient(500 * time.Millisecond)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Get(target.RequestURL(path))
 	if err != nil {
 		return nil, err
 	}
@@ -1573,7 +1579,7 @@ func fetchAdminJSON(baseURL string, path string) (map[string]any, error) {
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("GET %s returned HTTP %d", url, resp.StatusCode)
+		return nil, fmt.Errorf("GET %s returned HTTP %d", target.URL(path), resp.StatusCode)
 	}
 	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {

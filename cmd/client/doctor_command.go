@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -186,9 +187,9 @@ func runDoctor(fs *pflag.FlagSet, lookupEnv func(string) (string, bool)) doctorR
 		}
 	}
 
-	healthResult := doctorHealthListenerCheck(cfg.Health.ListenAddr)
+	healthResult := doctorHealthListenerCheck(cfg.Health)
 	checks = append(checks, healthResult.Check)
-	checks = append(checks, doctorUICheck(cfg.Health.ListenAddr, healthResult.Check.Status))
+	checks = append(checks, doctorUICheck(cfg.Health, healthResult.Check.Status))
 	checks = append(checks, doctorCodexCheck(lookupEnv))
 	return finalizeDoctorReport(checks, source)
 }
@@ -473,7 +474,57 @@ func doctorBaseURL(listenAddr string) string {
 	return "http://" + net.JoinHostPort(host, port)
 }
 
-func doctorHealthListenerCheck(listenAddr string) doctorHealthListenerResult {
+func doctorHealthListenerCheck(cfg config.HealthConfig) doctorHealthListenerResult {
+	if cfg.UnixSocket != "" {
+		if err := os.MkdirAll(filepath.Dir(cfg.UnixSocket), 0o755); err != nil {
+			return doctorHealthListenerResult{
+				Check: doctorCheck{
+					ID:      "health_listener",
+					Status:  doctorStatusFail,
+					Summary: err.Error(),
+					Why:     "tunnel-client must bind the local health/admin listener before it can serve /healthz, /readyz, or /ui.",
+					Evidence: []string{
+						cfg.UnixSocket,
+						err.Error(),
+					},
+					Next: []string{
+						"choose a writable --health.unix-socket path",
+						"rerun: tunnel-client doctor",
+					},
+				},
+			}
+		}
+		ln, err := net.Listen("unix", cfg.UnixSocket)
+		if err != nil {
+			return doctorHealthListenerResult{
+				Check: doctorCheck{
+					ID:      "health_listener",
+					Status:  doctorStatusFail,
+					Summary: err.Error(),
+					Why:     "tunnel-client must bind the local health/admin listener before it can serve /healthz, /readyz, or /ui.",
+					Evidence: []string{
+						cfg.UnixSocket,
+						err.Error(),
+					},
+					Next: []string{
+						"choose a different --health.unix-socket or remove the stale socket",
+						"rerun: tunnel-client doctor",
+					},
+				},
+			}
+		}
+		_ = ln.Close()
+		_ = os.Remove(cfg.UnixSocket)
+		return doctorHealthListenerResult{
+			Check: doctorCheck{
+				ID:      "health_listener",
+				Status:  doctorStatusPass,
+				Summary: "will bind unix socket " + cfg.UnixSocket,
+			},
+		}
+	}
+
+	listenAddr := cfg.ListenAddr
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return doctorHealthListenerResult{
@@ -516,7 +567,7 @@ func doctorHealthListenerCheck(listenAddr string) doctorHealthListenerResult {
 	}
 }
 
-func doctorUICheck(listenAddr string, healthStatus doctorStatus) doctorCheck {
+func doctorUICheck(cfg config.HealthConfig, healthStatus doctorStatus) doctorCheck {
 	if healthStatus != doctorStatusPass {
 		return doctorCheck{
 			ID:      "ui",
@@ -524,6 +575,14 @@ func doctorUICheck(listenAddr string, healthStatus doctorStatus) doctorCheck {
 			Summary: "blocked by health listener check",
 		}
 	}
+	if cfg.UnixSocket != "" {
+		return doctorCheck{
+			ID:      "ui",
+			Status:  doctorStatusPass,
+			Summary: "inspect startup summary or HEALTH_URL_FILE for the Unix-socket admin URL",
+		}
+	}
+	listenAddr := cfg.ListenAddr
 	if _, port, err := net.SplitHostPort(listenAddr); err == nil && port == "0" {
 		return doctorCheck{
 			ID:      "ui",

@@ -101,6 +101,7 @@ var commonFlagAliases = []flagAlias{
 	{Canonical: "mcp.extra-headers", Alias: "mcp-extra-headers", Kind: "stringArray"},
 	{Canonical: "mcp.discovery-extra-headers", Alias: "mcp-discovery-extra-headers", Kind: "stringArray"},
 	{Canonical: "health.listen-addr", Alias: "health-listen-addr", Kind: "string"},
+	{Canonical: "health.unix-socket", Alias: "health-unix-socket", Kind: "string"},
 	{Canonical: "health.url-file", Alias: "health-url-file", Kind: "string"},
 }
 
@@ -174,6 +175,7 @@ type LoggingConfig struct {
 // HealthConfig defines the health server behavior.
 type HealthConfig struct {
 	ListenAddr string
+	UnixSocket string
 	URLFile    string
 }
 
@@ -371,7 +373,8 @@ func WriteUsage(fs *pflag.FlagSet, w io.Writer) {
 	_, _ = fmt.Fprintln(fs.Output(), "  TUNNEL_CLIENT_PROFILE_DIR\tProfile directory override (default: $XDG_CONFIG_HOME/tunnel-client or ~/.config/tunnel-client)")
 	_, _ = fmt.Fprintln(fs.Output(), "  XDG_CONFIG_HOME\tBase directory for default tunnel-client profiles (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  HEALTH_LISTEN_ADDR\tHealth/admin listen address; use :0 to request an ephemeral port (optional)")
-	_, _ = fmt.Fprintln(fs.Output(), "  HEALTH_URL_FILE\tWrite the resolved health base URL after startup; recommended with HEALTH_LISTEN_ADDR=:0 (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  HEALTH_UNIX_SOCKET\tHealth/admin Unix socket path; when set, tunnel-client does not bind TCP for health/admin (optional)")
+	_, _ = fmt.Fprintln(fs.Output(), "  HEALTH_URL_FILE\tWrite the resolved health base URL after startup; recommended with HEALTH_LISTEN_ADDR=:0 or HEALTH_UNIX_SOCKET (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  ALLOW_REMOTE_UI\tSet to true to allow non-loopback access to the embedded web UI (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  OPEN_WEB_UI\tSet to true to open the embedded web UI in a browser on startup (optional)")
 	_, _ = fmt.Fprintln(fs.Output(), "  ADMIN_UI_LOG_BUFFER_EVENTS\tRecent log-event capacity for the embedded web UI and export archive (optional)")
@@ -405,7 +408,8 @@ func RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("log.format", defaultLogFormat.String(), "Log format (struct-text, json) (env.LOG_FORMAT)")
 	fs.String("log.file", "", "Log file path; defaults to stdout when empty (env.LOG_FILE)")
 	fs.Bool("log.http-raw-unsafe", false, "Log full raw HTTP requests and responses (including bodies/headers). WARNING: May include PII or sensitive data. Use only for debugging. (env.LOG_HTTP_RAW_UNSAFE)")
-	fs.String("health.listen-addr", defaultHealthListenAddr, "Address the health HTTP server listens on (ip:port). Use :8080 to listen on all interfaces, or 127.0.0.1:0 to request a loopback ephemeral port from the OS. (env.HEALTH_LISTEN_ADDR)")
+	fs.String("health.listen-addr", defaultHealthListenAddr, "Address the health HTTP server listens on (ip:port). Use :8080 to listen on all interfaces, or 127.0.0.1:0 to request a loopback ephemeral port from the OS. Ignored when health.unix-socket is set. (env.HEALTH_LISTEN_ADDR)")
+	fs.String("health.unix-socket", "", "Unix socket path for the health/admin HTTP server. When set, tunnel-client serves health/admin over the socket instead of binding TCP. (env.HEALTH_UNIX_SOCKET)")
 	fs.String("health.url-file", "", "File to write the health base URL to after startup (env.HEALTH_URL_FILE)")
 	fs.Bool("allow-remote-ui", false, "Allow remote access to the embedded web UI and log endpoints (env.ALLOW_REMOTE_UI)")
 	fs.Bool("open-web-ui", false, "Open the embedded web UI in your default browser on startup (env.OPEN_WEB_UI)")
@@ -1279,9 +1283,14 @@ func buildHealthConfig(fs *pflag.FlagSet, lookupEnv func(string) (string, bool))
 		getValue(fs, "health.url-file"),
 		envOrDefault(lookupEnv, "HEALTH_URL_FILE", ""),
 	)
+	unixSocket := firstSet(
+		getValue(fs, "health.unix-socket"),
+		envOrDefault(lookupEnv, "HEALTH_UNIX_SOCKET", ""),
+	)
 
 	return HealthConfig{
 		ListenAddr: listenAddr,
+		UnixSocket: unixSocket,
 		URLFile:    urlFile,
 	}
 }

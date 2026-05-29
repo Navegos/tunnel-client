@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -10,8 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"go.openai.org/api/tunnel-client/pkg/healthurl"
 )
 
 func TestHealthCommandWithURLFileAndPIDFile(t *testing.T) {
@@ -163,6 +167,62 @@ func TestHealthCommandRequiresControlPlanePollFailsBeforeFirstPoll(t *testing.T)
 	require.Contains(t, stdout, "Control-plane poll: FAIL")
 	require.Contains(t, stdout, "no control-plane poll attempt observed")
 	require.Contains(t, stdout, "Result: FAIL")
+}
+
+func TestHealthCommandWithUnixSocketURLFile(t *testing.T) {
+	t.Parallel()
+
+	socketPath := shortSocketPath(t, "tunnel-client-health-command-*.sock")
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = listener.Close()
+	})
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/healthz":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("live"))
+			case "/readyz":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("ready"))
+			case "/metrics":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("commands_poll_cycles_total 1\n"))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}),
+	}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, server.Shutdown(ctx))
+	})
+
+	urlFile := filepath.Join(t.TempDir(), "health.url")
+	require.NoError(t, os.WriteFile(urlFile, []byte(healthurl.BuildUnixBaseURL(socketPath)+"\n"), 0o600))
+
+	stdout, stderr, err := executeCommand(
+		t,
+		map[string]string{},
+		"health",
+		"--url-file",
+		urlFile,
+		"--require-control-plane-poll",
+	)
+
+	require.NoError(t, err, stderr)
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "Healthz: PASS")
+	require.Contains(t, stdout, "Readyz: PASS")
+	require.Contains(t, stdout, "Control-plane poll: PASS")
+	require.Contains(t, stdout, "Result: OK")
 }
 
 func healthTestServer(t *testing.T, healthStatus int, healthBody string, readyStatus int, readyBody string) *httptest.Server {

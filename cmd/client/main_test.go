@@ -26,6 +26,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/app"
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/health"
+	"go.openai.org/api/tunnel-client/pkg/healthurl"
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
@@ -213,6 +214,88 @@ func TestAppFailsToStartWithBusyHealthPort(t *testing.T) {
 	require.Contains(t, err.Error(), "address already in use")
 }
 
+func TestAppServesHealthAndAdminOverUnixSocket(t *testing.T) {
+	tempDir := t.TempDir()
+	socketPath := shortSocketPath(t, "tunnel-client-main-health-*.sock")
+	healthURLPath := filepath.Join(tempDir, "health_url")
+	tunnelID := types.TunnelID("tunnel_0123456789abcdef0123456789abcdef")
+
+	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tunnels/" + url.PathEscape(tunnelID.String()):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"` + tunnelID.String() + `","name":"test tunnel","description":"test fixture"}`))
+		case "/v1/tunnel/" + url.PathEscape(tunnelID.String()) + "/poll":
+			w.WriteHeader(http.StatusNoContent)
+		case "/v1/tunnel/" + url.PathEscape(tunnelID.String()) + "/response":
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(controlPlane.Close)
+
+	cfg := &config.Config{
+		ControlPlane: config.ControlPlaneConfig{
+			BaseURL:             mustParseURL(t, controlPlane.URL),
+			TunnelID:            tunnelID,
+			APIKey:              "test-api-key",
+			MaxInFlightRequests: 1,
+			PollTimeout:         100 * time.Millisecond,
+		},
+		Logging: config.LoggingConfig{
+			Level: slog.LevelInfo,
+		},
+		Health: config.HealthConfig{
+			UnixSocket: socketPath,
+			URLFile:    healthURLPath,
+		},
+		MCP: config.MCPConfig{
+			TransportKind:         config.MCPTransportStdio,
+			Command:               "cat",
+			CommandArgs:           []string{"cat"},
+			ConnectionMaxTTL:      time.Minute,
+			MaxConcurrentRequests: 10,
+		},
+	}
+
+	var svc health.Service
+	app := fxtest.New(t,
+		app.Options(
+			cfg,
+			fx.StartTimeout(5*time.Second),
+			fx.StopTimeout(5*time.Second),
+			fx.Populate(&svc),
+		)...,
+	)
+	app.RequireStart()
+	t.Cleanup(app.RequireStop)
+
+	require.NotNil(t, svc)
+	addr, err := svc.Addr(2 * time.Second)
+	require.NoError(t, err)
+	require.Equal(t, socketPath, addr)
+
+	healthURLContents, err := os.ReadFile(healthURLPath)
+	require.NoError(t, err)
+	baseURL := strings.TrimSpace(string(healthURLContents))
+	require.Equal(t, healthurl.BuildUnixBaseURL(socketPath), baseURL)
+
+	target, err := healthurl.Parse(baseURL)
+	require.NoError(t, err)
+	client, err := target.HTTPClient(2 * time.Second)
+	require.NoError(t, err)
+
+	require.NoError(t, waitForReady(client, target.RequestBaseURL, 6*time.Second))
+
+	for _, path := range []string{"/healthz", "/api/status", "/api/logs"} {
+		resp, err := client.Get(target.RequestURL(path))
+		require.NoErrorf(t, err, "GET %s", path)
+		require.NoError(t, resp.Body.Close())
+		require.Equalf(t, http.StatusOK, resp.StatusCode, "%s response status", path)
+	}
+}
+
 func waitForReady(client *http.Client, baseURL string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -264,4 +347,17 @@ func readTarGzFiles(t *testing.T, data []byte) map[string]string {
 		files[hdr.Name] = string(body)
 	}
 	return files
+}
+
+func shortSocketPath(t *testing.T, pattern string) string {
+	t.Helper()
+
+	socketFile, err := os.CreateTemp("/tmp", pattern)
+	require.NoError(t, err)
+	require.NoError(t, socketFile.Close())
+	require.NoError(t, os.Remove(socketFile.Name()))
+	t.Cleanup(func() {
+		_ = os.Remove(socketFile.Name())
+	})
+	return socketFile.Name()
 }

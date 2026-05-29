@@ -338,6 +338,7 @@ func isRelevantRuntimeEnvKey(key string) bool {
 	case "ALLOW_REMOTE_UI",
 		"CA_BUNDLE",
 		"HEALTH_LISTEN_ADDR",
+		"HEALTH_UNIX_SOCKET",
 		"HEALTH_URL_FILE",
 		"HTTP_PROXY",
 		"HTTPS_PROXY",
@@ -583,6 +584,7 @@ func buildEffectiveConfigSnapshot(cfg *config.Config) map[string]any {
 		},
 		"health": map[string]any{
 			"listen_addr": cfg.Health.ListenAddr,
+			"unix_socket": redactString(cfg.Health.UnixSocket),
 			"url_file":    redactString(cfg.Health.URLFile),
 		},
 		"process": map[string]any{

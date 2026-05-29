@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"go.openai.org/api/tunnel-client/pkg/codexplugin/state"
+	"go.openai.org/api/tunnel-client/pkg/healthurl"
 )
 
 const (
@@ -540,27 +541,19 @@ func ReadHealthURL(path string) string {
 }
 
 func ProbeHealthEndpoints(rawHealthURL string) HealthProbe {
-	baseURL := NormalizeHealthBaseURL(rawHealthURL)
-	if baseURL == "" {
+	target, err := healthurl.Parse(rawHealthURL)
+	if err != nil {
 		return HealthProbe{}
 	}
-	healthURL := strings.TrimRight(baseURL, "/") + "/healthz"
-	readyURL := strings.TrimRight(baseURL, "/") + "/readyz"
 	return HealthProbe{
-		BaseURL: baseURL,
-		Healthz: probeEndpoint(healthURL),
-		Readyz:  probeEndpoint(readyURL),
+		BaseURL: target.BaseURL,
+		Healthz: probeEndpoint(target, "/healthz"),
+		Readyz:  probeEndpoint(target, "/readyz"),
 	}
 }
 
 func NormalizeHealthBaseURL(rawHealthURL string) string {
-	value := strings.TrimSpace(rawHealthURL)
-	if value == "" {
-		return ""
-	}
-	value = strings.TrimSuffix(value, "/healthz")
-	value = strings.TrimSuffix(value, "/readyz")
-	return strings.TrimRight(value, "/")
+	return healthurl.NormalizeBaseURL(rawHealthURL)
 }
 
 func ClearHealthURLFile(alias string, root state.Root) {
@@ -694,24 +687,28 @@ func runtimeIsRunning(rt Runtime, alias string, root state.Root, mode string, pi
 	}
 }
 
-func probeEndpoint(url string) EndpointProbe {
+func probeEndpoint(target healthurl.Target, path string) EndpointProbe {
 	ctx, cancel := context.WithTimeout(context.Background(), healthProbeTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.RequestURL(path), nil)
 	if err != nil {
-		return EndpointProbe{URL: url, Error: err.Error()}
+		return EndpointProbe{URL: target.URL(path), Error: err.Error()}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client, err := target.HTTPClient(healthProbeTimeout)
 	if err != nil {
-		return EndpointProbe{URL: url, Error: err.Error()}
+		return EndpointProbe{URL: target.URL(path), Error: err.Error()}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return EndpointProbe{URL: target.URL(path), Error: err.Error()}
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err := resp.Body.Close(); err != nil {
-		return EndpointProbe{URL: url, Error: err.Error()}
+		return EndpointProbe{URL: target.URL(path), Error: err.Error()}
 	}
 	return EndpointProbe{
-		URL:    url,
+		URL:    target.URL(path),
 		OK:     resp.StatusCode >= 200 && resp.StatusCode < 300,
 		Status: resp.StatusCode,
 		Body:   strings.TrimSpace(string(body)),

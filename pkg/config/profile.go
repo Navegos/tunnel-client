@@ -305,6 +305,9 @@ func validateFileConfigSyntax(c fileConfig) error {
 	if err := validateConfigValueReferenceSyntax("health.listen_addr", c.Health.ListenAddr); err != nil {
 		return err
 	}
+	if err := validateConfigValueReferenceSyntax("health.unix_socket", c.Health.UnixSocket); err != nil {
+		return err
+	}
 	if err := validateHeaderReferenceSyntax("mcp.extra_headers", c.MCP.ExtraHeaders); err != nil {
 		return err
 	}

@@ -17,6 +17,7 @@ disconnect_timeout_seconds="${DISCONNECT_TIMEOUT_SECONDS:-30.0}"
 client_pid=""
 tmpdir=""
 health_url_file=""
+health_unix_socket=""
 control_plane_socket_path="${TUNNEL_INTEGRATION_TUNNEL_SERVICE_SOCKET_PATH:-}"
 
 stop_client() {
@@ -191,12 +192,19 @@ tmp_parent="${TMPDIR:-${TEST_TMPDIR:-/tmp}}"
 mkdir -p "$tmp_parent"
 tmpdir="$(mktemp -d "$tmp_parent/tunnel-client-preflight-XXXXXX")"
 health_url_file="$tmpdir/tunnel-client-health-url"
+health_unix_socket="$tmpdir/tunnel-client-health.sock"
+if [[ -n "${HEALTH_URL_FILE:-}" ]]; then
+  health_url_file="$HEALTH_URL_FILE"
+fi
+if [[ -n "${HEALTH_UNIX_SOCKET:-}" ]]; then
+  health_unix_socket="$HEALTH_UNIX_SOCKET"
+fi
 
 command=(
   "$client_path"
   run
   "--profile-file=$profile_file"
-  "--health.listen-addr=127.0.0.1:0"
+  "--health.unix-socket=$health_unix_socket"
   "--health.url-file=$health_url_file"
 )
 
@@ -234,9 +242,6 @@ done
 if [[ -z "$health_url" ]] || ! "$client_path" health --url-file "$health_url_file" >/dev/null 2>&1; then
   log_event "tunnel-client did not become ready within ${startup_timeout_seconds}s"
   emit_health_snapshot
-  if [[ -n "$health_url" ]]; then
-    emit_http_snapshot "${health_url%/}/readyz" 1.0
-  fi
   exit 1
 fi
 

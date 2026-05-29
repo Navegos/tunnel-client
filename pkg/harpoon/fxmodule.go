@@ -17,6 +17,7 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/config"
 	"go.openai.org/api/tunnel-client/pkg/harpoon/hostbus"
 	"go.openai.org/api/tunnel-client/pkg/health"
+	"go.openai.org/api/tunnel-client/pkg/healthurl"
 	"go.openai.org/api/tunnel-client/pkg/httpguard"
 	tclog "go.openai.org/api/tunnel-client/pkg/log"
 	"go.openai.org/api/tunnel-client/pkg/proxy"
@@ -220,6 +221,9 @@ func registerAdditionalTransport(p additionalTransportParams) error {
 func buildHarpoonHTTPEndpoint(healthCfg *config.HealthConfig, svc health.Service, timeout time.Duration) string {
 	if svc != nil {
 		if addr, err := svc.Addr(timeout); err == nil && addr != "" {
+			if healthCfg != nil && healthCfg.UnixSocket != "" {
+				return healthurl.BuildUnixBaseURL(healthCfg.UnixSocket) + "/harpoon/mcp"
+			}
 			return fmt.Sprintf("http://%s/harpoon/mcp", addr)
 		}
 	}
