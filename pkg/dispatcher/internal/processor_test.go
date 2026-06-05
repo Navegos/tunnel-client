@@ -983,6 +983,63 @@ func TestProcessorForwardsNotificationsWithJSONContentType(t *testing.T) {
 	require.Equal(t, callID, jsonResp.ID)
 }
 
+func TestProcessorPreservesOAuthChallengeHeadersOnUnauthorizedWrite(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	responder := newRecordingResponder()
+
+	id, err := jsonrpc.MakeID("unauthorized-init")
+	require.NoError(t, err)
+
+	challenge := `Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"`
+	challengeHeaders := http.Header{}
+	challengeHeaders.Set("WWW-Authenticate", challenge)
+	transport := &stubForwardingTransport{
+		conn: &stubForwardingConnection{
+			statusCode:      http.StatusUnauthorized,
+			responseHeaders: challengeHeaders,
+		},
+	}
+
+	meterProvider := newTestMeterProvider(t)
+	processor, err := NewProcessor(processorParams{
+		Logger:          logger,
+		ChannelBindings: newTestChannelBindings(transport),
+		TunnelResponder: responder,
+		MCPConfig:       newTestMCPConfig(t, time.Second),
+		OAuthHTTPClient: &http.Client{},
+		ControlPlaneCfg: newTestControlPlaneConfig(t),
+		MeterProvider:   meterProvider,
+	})
+	require.NoError(t, err)
+
+	cmd := &fakePolledCommand{
+		id:         types.RequestID("unauthorized-init-request"),
+		message:    &jsonrpc.Request{ID: id, Method: "initialize"},
+		enqueuedAt: time.Now(),
+		polledAt:   time.Now(),
+		shardToken: "shard-unauthorized-init",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	require.NoError(t, processor.Process(ctx, cmd))
+
+	resp := responder.waitForResponse(t)
+	require.Equal(t, cmd.id, resp.requestID)
+	require.Equal(t, http.StatusUnauthorized, resp.response.ResponseCode())
+	require.Equal(t, types.ResponseTypeJSONRPCResponse, resp.response.Type())
+	require.Equal(t, challenge, resp.response.Headers().Get("WWW-Authenticate"))
+	require.Equal(t, "application/json", resp.response.Headers().Get("Content-Type"))
+
+	rpcResp := decodeJSONRPCResponse(t, resp.response.Payload())
+	require.NotNil(t, rpcResp)
+	require.NotNil(t, rpcResp.Error)
+	require.Contains(t, rpcResp.Error.Error(), http.StatusText(http.StatusUnauthorized))
+}
+
 func TestProcessorReturnsErrorResponseOnWriteFailure(t *testing.T) {
 	t.Parallel()
 

@@ -62,6 +62,13 @@ func TestSecureMCPServerOAuthProtection(t *testing.T) {
 				if len(resp.JSONResponse) == 0 {
 					target.Fatalf("unauthorized init missing resp_json payload")
 				}
+				challenge := resp.ResponseHeaders.Get("WWW-Authenticate")
+				if challenge == "" {
+					target.Fatalf("unauthorized init missing WWW-Authenticate challenge: %v", resp.ResponseHeaders)
+				}
+				if !strings.Contains(challenge, "resource_metadata") {
+					target.Fatalf("unauthorized init WWW-Authenticate missing resource_metadata: %q", challenge)
+				}
 			},
 		}},
 	}
