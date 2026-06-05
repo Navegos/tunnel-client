@@ -1,6 +1,7 @@
 package mcpclient
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -25,6 +26,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"go.openai.org/api/tunnel-client/pkg/config"
+	"go.openai.org/api/tunnel-client/pkg/mcpclient/internal"
 	"go.openai.org/api/tunnel-client/pkg/tlsconfig"
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
@@ -224,6 +226,75 @@ func TestChannelTransportFactoryScopesStaticAuthorizationPerBinding(t *testing.T
 	}
 	_ = resp.Body.Close()
 	requireHeaderValue(t, serverBAuth, "Bearer static-mcp-token")
+}
+
+func TestChannelTransportFactoryConnectorAuthorizationOverridesStaticHeader(t *testing.T) {
+	t.Parallel()
+
+	seenHeaders := make(chan http.Header, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenHeaders <- r.Header.Clone()
+		w.Header().Set(HeaderSessionID, "session-from-mcp")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(server.Close)
+
+	binding := config.MCPChannelBinding{
+		Channel:       types.DefaultChannel,
+		TransportKind: config.MCPTransportHTTPStreamable,
+		ServerURL:     mustParseURLFactoryTest(t, server.URL+"/mcp"),
+	}
+	cfg := &config.MCPConfig{
+		ChannelBindings:       []config.MCPChannelBinding{binding},
+		ExtraHeaders:          map[string]string{"Authorization": "Bearer static-mcp-token"},
+		DiscoveryExtraHeaders: map[string]string{"X-Discovery-Auth": "discovery-only"},
+	}
+
+	factory, err := newChannelTransportFactory(channelTransportFactoryParams{
+		Config:        cfg,
+		Logging:       &config.LoggingConfig{},
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MeterProvider: sdkmetric.NewMeterProvider(),
+	})
+	if err != nil {
+		t.Fatalf("newChannelTransportFactory failed: %v", err)
+	}
+
+	client, err := factory.HTTPClientForBinding(binding)
+	if err != nil {
+		t.Fatalf("HTTPClientForBinding failed: %v", err)
+	}
+
+	ctx, carrier, err := internal.ContextWithHeaders(context.Background(), http.Header{
+		"Authorization": {"Bearer connector-user-token"},
+	})
+	if err != nil {
+		t.Fatalf("ContextWithHeaders failed: %v", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/mcp", nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext failed: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("connector-authorized request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	gotHeaders := <-seenHeaders
+	if got := gotHeaders.Get("Authorization"); got != "Bearer connector-user-token" {
+		t.Fatalf("Authorization header = %q, want connector token to override static token", got)
+	}
+	if got := gotHeaders.Get("X-Discovery-Auth"); got != "" {
+		t.Fatalf("runtime request unexpectedly received discovery header %q", got)
+	}
+	status, responseHeaders := carrier.ResponseStatusAndHeaders()
+	if status != http.StatusAccepted {
+		t.Fatalf("captured response status = %d, want %d", status, http.StatusAccepted)
+	}
+	if got := responseHeaders.Get(HeaderSessionID); got != "session-from-mcp" {
+		t.Fatalf("captured %s = %q, want session-from-mcp", HeaderSessionID, got)
+	}
 }
 
 func requireHeaderValue(t *testing.T, ch <-chan string, want string) {
