@@ -135,6 +135,7 @@ func runStaticHeadersTransportCase(t *testing.T, useUnixMCP bool) {
 	}
 
 	toolHeaders := http.Header{
+		"Authorization":   []string{"Bearer connector-user-token"},
 		"X-Internal-Auth": []string{"forwarded-runtime"},
 	}
 	toolCommand := mocktunnelservice.CommandResponse{
@@ -172,6 +173,7 @@ func runStaticHeadersTransportCase(t *testing.T, useUnixMCP bool) {
 		harnesspkg.WithClientConfig(func(cfg *config.Config) {
 			cfg.Logging.Level = slog.LevelDebug
 			cfg.MCP.ExtraHeaders = map[string]string{
+				"Authorization":   "Bearer static-service-token",
 				"X-MCP-Static":    "mcp-static",
 				"X-Internal-Auth": "mcp-generic",
 			}
@@ -225,6 +227,9 @@ func assertControlPlaneDidNotReceiveStaticHeaders(t *testing.T, requests []mockt
 		if got := req.Headers.Get("X-Discovery-Auth"); got != "" {
 			t.Fatalf("control-plane %s %s received X-Discovery-Auth=%q", req.Method, req.Path, got)
 		}
+		if got := req.Headers.Get("Authorization"); got == "Bearer static-service-token" || got == "Bearer connector-user-token" {
+			t.Fatalf("control-plane %s %s received MCP Authorization=%q", req.Method, req.Path, got)
+		}
 	}
 }
 
@@ -240,6 +245,9 @@ func assertAuthServerDidNotReceiveStaticHeaders(t *testing.T, requests []http.He
 		if got := headers.Get("X-Discovery-Auth"); got != "" {
 			t.Fatalf("auth server received X-Discovery-Auth=%q", got)
 		}
+		if got := headers.Get("Authorization"); got != "" {
+			t.Fatalf("auth server received Authorization=%q", got)
+		}
 	}
 }
 
@@ -253,6 +261,9 @@ func assertMCPDiscoveryHeaders(t *testing.T, requests []mockmcpserver.IncomingHT
 	for _, req := range requests {
 		if req.Path == "/.well-known/oauth-protected-resource" {
 			wellKnownSeen = true
+			if got := req.Headers.Get("Authorization"); got != "Bearer static-service-token" {
+				t.Fatalf("well-known Authorization=%q", got)
+			}
 			if got := req.Headers.Get("X-MCP-Static"); got != "mcp-static" {
 				t.Fatalf("well-known X-MCP-Static=%q", got)
 			}
@@ -288,6 +299,9 @@ func assertMCPRuntimeHeaders(t *testing.T, requests []mockmcpserver.IncomingRequ
 		t.Fatalf("expected one tool request, got %d", len(requests))
 	}
 	headers := requests[0].Headers
+	if got := headers.Get("Authorization"); got != "Bearer connector-user-token" {
+		t.Fatalf("runtime Authorization=%q", got)
+	}
 	if got := headers.Get("X-MCP-Static"); got != "mcp-static" {
 		t.Fatalf("runtime X-MCP-Static=%q", got)
 	}
