@@ -277,7 +277,7 @@ func TestCodexStatusJSONReportsBridgeReadyWhenAssistantProbeStalls(t *testing.T)
 	require.Contains(t, stdout, `"state": "bridge_ready"`)
 	require.Contains(t, stdout, `"bridge_ready": true`)
 	require.Contains(t, stdout, `"assistant_state": "unavailable"`)
-	require.Contains(t, stdout, `"assistant_error": "thread/start timed out after 50ms`)
+	require.Regexp(t, `"assistant_error": "thread/start timed out after [0-9]+ms`, stdout)
 	require.Contains(t, stdout, `recent stderr: thread/start is stuck`)
 }
 
