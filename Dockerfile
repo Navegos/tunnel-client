@@ -9,7 +9,7 @@ ARG PROJECT_ROOT=.
 FROM ${BASE_UI_BUILDER_IMAGE} AS ui-builder
 ARG PROJECT_ROOT=.
 WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@11.0.7 --activate
+RUN corepack enable && corepack prepare pnpm@11.4.0+sha512.f0febc7e37552ab485494a914241b338e0b3580b93d54ce31f00933015880863129038a1b4ae4e414a0ee63ac35bf21197e990172c4a68256450b5636310968f --activate
 COPY ${PROJECT_ROOT}/adminui/package.json ./adminui/
 COPY ${PROJECT_ROOT}/adminui/pnpm-lock.yaml ./adminui/
 COPY ${PROJECT_ROOT}/adminui/pnpm-workspace.yaml ./adminui/
