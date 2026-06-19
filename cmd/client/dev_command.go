@@ -44,6 +44,7 @@ func newDevProxyCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 		healthListenAddr      string
 		healthURLFile         string
 		urlFile               string
+		backend               localproxy.BackendName
 		printJSON             bool
 		duration              time.Duration
 		readinessTimeout      time.Duration
@@ -75,6 +76,7 @@ hosted tunnel control plane or a separate control-plane process.`,
 				HealthListenAddr:      healthListenAddr,
 				HealthURLFile:         healthURLFile,
 				URLFile:               urlFile,
+				Backend:               backend,
 				ResponseTimeout:       responseTimeout,
 				ClientLastSeenTimeout: clientLastSeenTimeout,
 				ReadinessTimeout:      readinessTimeout,
@@ -122,6 +124,7 @@ hosted tunnel control plane or a separate control-plane process.`,
 	cmd.Flags().StringVar(&healthListenAddr, "health-listen-addr", localproxy.DefaultHealthListenAddr, "Optional tunnel-client health/admin listen address; omit to run without a health/admin listener")
 	cmd.Flags().StringVar(&healthURLFile, "health-url-file", "", "Write the tunnel-client health base URL to this file; enables an ephemeral health/admin listener when --health-listen-addr is omitted")
 	cmd.Flags().StringVar(&urlFile, "url-file", "", "Write the local proxy connection JSON to this file")
+	cmd.Flags().StringVar((*string)(&backend), "backend", string(localproxy.DefaultBackend), "Local proxy backend: auto, go, or rust")
 	cmd.Flags().BoolVar(&printJSON, "print-json", false, "Print local proxy connection JSON after readiness")
 	cmd.Flags().DurationVar(&duration, "duration", 0, "Run for a bounded duration, then exit")
 	cmd.Flags().DurationVar(&readinessTimeout, "readiness-timeout", localproxy.DefaultReadinessTimeout, "Maximum time to wait for tunnel-client and MCP readiness")

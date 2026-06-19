@@ -1,6 +1,6 @@
 // TypeScript wrapper for tests that need tunnel-client-driven MCP tunnels.
 //
-// The local helper starts `tunnel-client dev proxy`, which includes a pure-Go
+// The local helper starts `tunnel-client dev proxy`, which includes a local
 // in-memory control plane. The remote helper starts `tunnel-client run` against
 // a caller-provided control plane and MCP server.
 

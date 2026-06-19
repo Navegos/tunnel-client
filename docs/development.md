@@ -52,15 +52,17 @@ need tunnel-client in the path:
   hosted control plane.
 - Local control plane: start your MCP server, then start
   `tunnel-client dev proxy --mcp-server-url <url> --print-json`. This runs a
-  pure-Go in-memory control plane plus tunnel-client in one process and prints
-  an `mcp_url` that tests can POST JSON-RPC requests to.
+  local in-memory control plane plus tunnel-client in one process and prints an
+  `mcp_url` that tests can POST JSON-RPC requests to.
 
 `dev proxy` runs the local control plane and tunnel-client in one process. It
 prefers a Unix-domain socket for tunnel-client control-plane traffic when the OS
 supports it and falls back to TCP otherwise. It starts no health/admin listener
 by default; pass `--health-listen-addr 127.0.0.1:0` or
 `--health-url-file <path>` only when a test needs `/healthz`, `/readyz`,
-`/metrics`, or `/ui`.
+`/metrics`, or `/ui`. The `--backend auto|go|rust` flag defaults to `auto`.
+Public builds use the Go backend unless an optional Rust backend adapter is
+linked into the binary; explicit `--backend rust` fails clearly when unavailable.
 
 Stable touch points:
 

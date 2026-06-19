@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -179,6 +180,50 @@ func TestStartEnablesEphemeralHealthListenerWhenURLFileRequested(t *testing.T) {
 func TestStartRejectsMissingMCPConfiguration(t *testing.T) {
 	_, err := Start(context.Background(), Options{})
 	require.ErrorContains(t, err, "set --mcp-server-url, --mcp-command, --profile, or --profile-file")
+}
+
+func TestStartRejectsUnavailableRustBackend(t *testing.T) {
+	_, err := Start(context.Background(), Options{
+		MCPServerURLs: []string{"http://127.0.0.1:1/mcp"},
+		Backend:       BackendRust,
+	})
+	require.ErrorContains(t, err, "rust local proxy backend is unavailable in this build")
+}
+
+func TestResolveBackendAutoFallsBackToGo(t *testing.T) {
+	factory, err := resolveBackendFactory(BackendAuto, nil)
+	require.NoError(t, err)
+	require.Equal(t, BackendGo, factory.Name())
+}
+
+func TestResolveBackendAutoPrefersRegisteredRust(t *testing.T) {
+	factory, err := resolveBackendFactory(BackendAuto, []BackendFactory{
+		fakeBackendFactory{name: BackendRust},
+	})
+	require.NoError(t, err)
+	require.Equal(t, BackendRust, factory.Name())
+}
+
+func TestResolveBackendRejectsUnavailableRust(t *testing.T) {
+	_, err := resolveBackendFactory(BackendRust, nil)
+	require.ErrorContains(t, err, "rust local proxy backend is unavailable in this build")
+}
+
+func TestResolveBackendRejectsUnknownBackend(t *testing.T) {
+	_, err := resolveBackendFactory(BackendName("python"), nil)
+	require.ErrorContains(t, err, `unknown local proxy backend "python"`)
+}
+
+type fakeBackendFactory struct {
+	name BackendName
+}
+
+func (f fakeBackendFactory) Name() BackendName {
+	return f.name
+}
+
+func (fakeBackendFactory) StartBackend(context.Context, BackendOptions) (Backend, error) {
+	return nil, errors.New("not implemented")
 }
 
 type toolCallResponse struct {

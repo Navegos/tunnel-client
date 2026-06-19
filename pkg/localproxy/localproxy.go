@@ -28,11 +28,21 @@ import (
 	"go.openai.org/api/tunnel-client/pkg/types"
 )
 
+// BackendName selects the local proxy engine used by Start.
+type BackendName string
+
+const (
+	BackendAuto BackendName = "auto"
+	BackendRust BackendName = "rust"
+	BackendGo   BackendName = "go"
+)
+
 const (
 	DefaultListenAddr                = "127.0.0.1:0"
 	DefaultHealthListenAddr          = ""
 	DefaultEnabledHealthListenAddr   = "127.0.0.1:0"
 	DefaultTunnelID                  = "tunnel_22222222222222222222222222222222"
+	DefaultBackend                   = BackendAuto
 	DefaultReadinessTimeout          = 10 * time.Second
 	DefaultResponseTimeout           = 30 * time.Second
 	DefaultClientLastSeenTimeout     = 20 * time.Second
@@ -72,7 +82,7 @@ var blockedRequestMCPHeaders = map[string]struct{}{
 	"user-agent":                        {},
 }
 
-// Options configures a pure-Go local control plane plus in-process tunnel-client runtime.
+// Options configures a local control plane plus in-process tunnel-client runtime.
 type Options struct {
 	ListenAddr    string
 	TunnelID      types.TunnelID
@@ -88,6 +98,12 @@ type Options struct {
 	// set without HealthListenAddr, Start uses an ephemeral loopback listener.
 	HealthURLFile string
 	URLFile       string
+	// Backend selects the local proxy backend. Empty defaults to auto.
+	Backend BackendName
+	// BackendFactories registers optional per-call backends linked into this
+	// binary. Process-wide linked backends can also be registered with
+	// RegisterBackendFactory.
+	BackendFactories []BackendFactory
 	// ResponseTimeout bounds how long local MCP ingress waits for a tunnel-client response.
 	ResponseTimeout time.Duration
 	// ClientLastSeenTimeout is used by readiness and local diagnostics.
@@ -115,12 +131,58 @@ type Info struct {
 type Proxy struct {
 	info                Info
 	clientApp           *fx.App
-	server              *localServer
+	backend             Backend
 	cleanupControlPlane func()
 	stopOnce            sync.Once
 }
 
-// Start starts the pure-Go local control plane and tunnel-client runtime.
+// BackendOptions configures a local proxy backend.
+type BackendOptions struct {
+	ListenAddr             string
+	ControlPlaneUnixSocket string
+	TunnelID               types.TunnelID
+	APIKey                 string
+	ResponseTimeout        time.Duration
+	ClientLastSeenTimeout  time.Duration
+	ReadinessTimeout       time.Duration
+	Stderr                 io.Writer
+}
+
+// BackendFactory starts a linked local proxy backend.
+type BackendFactory interface {
+	Name() BackendName
+	StartBackend(context.Context, BackendOptions) (Backend, error)
+}
+
+var registeredBackendFactories struct {
+	sync.RWMutex
+	factories []BackendFactory
+}
+
+// RegisterBackendFactory registers an optional local proxy backend linked into
+// the current binary.
+func RegisterBackendFactory(factory BackendFactory) {
+	if factory == nil {
+		return
+	}
+	registeredBackendFactories.Lock()
+	defer registeredBackendFactories.Unlock()
+	registeredBackendFactories.factories = append(registeredBackendFactories.factories, factory)
+}
+
+// Backend is the local control plane used by the tunnel-client runtime.
+type Backend interface {
+	Name() BackendName
+	InfoBackend() string
+	IngressBaseURL() *url.URL
+	ControlPlaneBaseURL() *url.URL
+	ControlPlaneUnixSocket() string
+	WaitForTunnelClient(context.Context, time.Duration, types.TunnelID) error
+	Wait(context.Context) error
+	Stop(context.Context) error
+}
+
+// Start starts the selected local control plane and tunnel-client runtime.
 func Start(ctx context.Context, opts Options) (*Proxy, error) {
 	if ctx == nil {
 		return nil, errors.New("local proxy context is nil")
@@ -130,34 +192,36 @@ func Start(ctx context.Context, opts Options) (*Proxy, error) {
 		return nil, err
 	}
 
-	controlPlaneUnixSocket, cleanupControlPlane := prepareControlPlaneUnixSocket()
-	controlPlaneTransport := "tcp"
-	if controlPlaneUnixSocket != "" {
-		controlPlaneTransport = "unix"
+	backendFactory, err := resolveBackendFactory(opts.Backend, linkedBackendFactories(opts.BackendFactories))
+	if err != nil {
+		return nil, err
 	}
 
-	server, err := startLocalServer(localServerOptions{
+	controlPlaneUnixSocket, cleanupControlPlane := prepareControlPlaneUnixSocket()
+	backend, err := backendFactory.StartBackend(ctx, BackendOptions{
 		ListenAddr:             opts.ListenAddr,
 		ControlPlaneUnixSocket: controlPlaneUnixSocket,
 		TunnelID:               opts.TunnelID,
 		APIKey:                 localControlPlaneAPIKey,
 		ResponseTimeout:        opts.ResponseTimeout,
 		ClientLastSeenTimeout:  opts.ClientLastSeenTimeout,
+		ReadinessTimeout:       opts.ReadinessTimeout,
+		Stderr:                 opts.Stderr,
 	})
 	if err != nil && controlPlaneUnixSocket != "" {
 		if cleanupControlPlane != nil {
 			cleanupControlPlane()
 		}
-		controlPlaneUnixSocket = ""
 		cleanupControlPlane = nil
-		controlPlaneTransport = "tcp"
-		_, _ = fmt.Fprintf(opts.Stderr, "warning: local control-plane unix listener unavailable; falling back to TCP: %v\n", err)
-		server, err = startLocalServer(localServerOptions{
+		_, _ = fmt.Fprintf(opts.Stderr, "warning: local proxy %s backend unix control-plane listener unavailable; falling back to TCP: %v\n", backendFactory.Name(), err)
+		backend, err = backendFactory.StartBackend(ctx, BackendOptions{
 			ListenAddr:            opts.ListenAddr,
 			TunnelID:              opts.TunnelID,
 			APIKey:                localControlPlaneAPIKey,
 			ResponseTimeout:       opts.ResponseTimeout,
 			ClientLastSeenTimeout: opts.ClientLastSeenTimeout,
+			ReadinessTimeout:      opts.ReadinessTimeout,
+			Stderr:                opts.Stderr,
 		})
 	}
 	if err != nil {
@@ -168,7 +232,7 @@ func Start(ctx context.Context, opts Options) (*Proxy, error) {
 	}
 
 	proxy := &Proxy{
-		server:              server,
+		backend:             backend,
 		cleanupControlPlane: cleanupControlPlane,
 	}
 	defer func() {
@@ -177,7 +241,7 @@ func Start(ctx context.Context, opts Options) (*Proxy, error) {
 		}
 	}()
 
-	cfg, err := buildClientConfig(opts, server.ControlPlaneBaseURL(), controlPlaneUnixSocket)
+	cfg, err := buildClientConfig(opts, backend.ControlPlaneBaseURL(), backend.ControlPlaneUnixSocket())
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +265,7 @@ func Start(ctx context.Context, opts Options) (*Proxy, error) {
 	if err = waitForMCPProbe(ctx, opts.ReadinessTimeout, probeState); err != nil {
 		return nil, err
 	}
-	if err = server.WaitForPoll(ctx, opts.ReadinessTimeout); err != nil {
+	if err = backend.WaitForTunnelClient(ctx, opts.ReadinessTimeout, opts.TunnelID); err != nil {
 		return nil, err
 	}
 
@@ -211,14 +275,18 @@ func Start(ctx context.Context, opts Options) (*Proxy, error) {
 			healthURL = "http://" + addr + "/readyz"
 		}
 	}
+	controlPlaneTransport := "tcp"
+	if backend.ControlPlaneUnixSocket() != "" {
+		controlPlaneTransport = "unix"
+	}
 	proxy.info = Info{
 		TunnelID:               opts.TunnelID.String(),
-		MCPURL:                 server.IngressBaseURL().JoinPath("v1", "mcp", opts.TunnelID.String()).String(),
-		ControlPlaneBaseURL:    server.ControlPlaneBaseURL().String(),
+		MCPURL:                 backend.IngressBaseURL().JoinPath("v1", "mcp", opts.TunnelID.String()).String(),
+		ControlPlaneBaseURL:    backend.ControlPlaneBaseURL().String(),
 		ControlPlaneTransport:  controlPlaneTransport,
-		ControlPlaneUnixSocket: controlPlaneUnixSocket,
+		ControlPlaneUnixSocket: backend.ControlPlaneUnixSocket(),
 		HealthURL:              healthURL,
-		Backend:                "go-in-memory",
+		Backend:                backend.InfoBackend(),
 	}
 	if opts.URLFile != "" {
 		if err = writeInfoFile(opts.URLFile, proxy.info); err != nil {
@@ -253,8 +321,8 @@ func (p *Proxy) Stop(ctx context.Context) error {
 				stopErr = errors.Join(stopErr, fmt.Errorf("stop tunnel-client runtime: %w", err))
 			}
 		}
-		if p.server != nil {
-			if err := p.server.Stop(ctx); err != nil {
+		if p.backend != nil {
+			if err := p.backend.Stop(ctx); err != nil {
 				stopErr = errors.Join(stopErr, fmt.Errorf("stop local control plane: %w", err))
 			}
 		}
@@ -273,11 +341,11 @@ func (p *Proxy) Wait(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if p.server == nil {
+	if p.backend == nil {
 		<-ctx.Done()
 		return p.Stop(context.Background())
 	}
-	err := p.server.Wait(ctx)
+	err := p.backend.Wait(ctx)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return p.Stop(context.Background())
 	}
@@ -287,6 +355,9 @@ func (p *Proxy) Wait(ctx context.Context) error {
 func applyDefaults(opts Options) Options {
 	if opts.ListenAddr == "" {
 		opts.ListenAddr = DefaultListenAddr
+	}
+	if opts.Backend == "" {
+		opts.Backend = DefaultBackend
 	}
 	if opts.TunnelID == "" {
 		opts.TunnelID = DefaultTunnelID
@@ -343,6 +414,54 @@ func validateOptions(opts Options) error {
 		return errors.New("readiness timeout must be positive")
 	}
 	return nil
+}
+
+func resolveBackendFactory(backend BackendName, factories []BackendFactory) (BackendFactory, error) {
+	allFactories := append([]BackendFactory{goBackendFactory{}}, factories...)
+	switch backend {
+	case BackendAuto:
+		if factory := findBackendFactory(allFactories, BackendRust); factory != nil {
+			return factory, nil
+		}
+		if factory := findBackendFactory(allFactories, BackendGo); factory != nil {
+			return factory, nil
+		}
+		return nil, errors.New("no local proxy backend is registered")
+	case BackendGo:
+		if factory := findBackendFactory(allFactories, BackendGo); factory != nil {
+			return factory, nil
+		}
+		return nil, errors.New("go local proxy backend is unavailable in this build")
+	case BackendRust:
+		if factory := findBackendFactory(allFactories, BackendRust); factory != nil {
+			return factory, nil
+		}
+		return nil, errors.New("rust local proxy backend is unavailable in this build")
+	default:
+		return nil, fmt.Errorf("unknown local proxy backend %q (supported: auto, rust, go)", backend)
+	}
+}
+
+func findBackendFactory(factories []BackendFactory, name BackendName) BackendFactory {
+	for i := len(factories) - 1; i >= 0; i-- {
+		factory := factories[i]
+		if factory == nil {
+			continue
+		}
+		if factory.Name() == name {
+			return factory
+		}
+	}
+	return nil
+}
+
+func linkedBackendFactories(callFactories []BackendFactory) []BackendFactory {
+	registeredBackendFactories.RLock()
+	defer registeredBackendFactories.RUnlock()
+	factories := make([]BackendFactory, 0, len(registeredBackendFactories.factories)+len(callFactories))
+	factories = append(factories, registeredBackendFactories.factories...)
+	factories = append(factories, callFactories...)
+	return factories
 }
 
 func buildClientConfig(opts Options, controlPlaneURL *url.URL, controlPlaneUnixSocket string) (*config.Config, error) {
@@ -453,6 +572,85 @@ func writeInfoFile(path string, info Info) error {
 		return fmt.Errorf("write URL file %s: %w", path, err)
 	}
 	return nil
+}
+
+type goBackendFactory struct{}
+
+func (goBackendFactory) Name() BackendName {
+	return BackendGo
+}
+
+func (goBackendFactory) StartBackend(_ context.Context, opts BackendOptions) (Backend, error) {
+	server, err := startLocalServer(localServerOptions{
+		ListenAddr:             opts.ListenAddr,
+		ControlPlaneUnixSocket: opts.ControlPlaneUnixSocket,
+		TunnelID:               opts.TunnelID,
+		APIKey:                 opts.APIKey,
+		ResponseTimeout:        opts.ResponseTimeout,
+		ClientLastSeenTimeout:  opts.ClientLastSeenTimeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &goBackend{
+		server:                 server,
+		controlPlaneUnixSocket: opts.ControlPlaneUnixSocket,
+	}, nil
+}
+
+type goBackend struct {
+	server                 *localServer
+	controlPlaneUnixSocket string
+}
+
+func (b *goBackend) Name() BackendName {
+	return BackendGo
+}
+
+func (b *goBackend) InfoBackend() string {
+	return "go-in-memory"
+}
+
+func (b *goBackend) IngressBaseURL() *url.URL {
+	if b == nil || b.server == nil {
+		return nil
+	}
+	return b.server.IngressBaseURL()
+}
+
+func (b *goBackend) ControlPlaneBaseURL() *url.URL {
+	if b == nil || b.server == nil {
+		return nil
+	}
+	return b.server.ControlPlaneBaseURL()
+}
+
+func (b *goBackend) ControlPlaneUnixSocket() string {
+	if b == nil {
+		return ""
+	}
+	return b.controlPlaneUnixSocket
+}
+
+func (b *goBackend) WaitForTunnelClient(ctx context.Context, timeout time.Duration, _ types.TunnelID) error {
+	if b == nil || b.server == nil {
+		return errors.New("go local proxy backend is nil")
+	}
+	return b.server.WaitForPoll(ctx, timeout)
+}
+
+func (b *goBackend) Wait(ctx context.Context) error {
+	if b == nil || b.server == nil {
+		return nil
+	}
+	return b.server.Wait(ctx)
+}
+
+func (b *goBackend) Stop(ctx context.Context) error {
+	if b == nil || b.server == nil {
+		return nil
+	}
+	return b.server.Stop(ctx)
 }
 
 type localServerOptions struct {
